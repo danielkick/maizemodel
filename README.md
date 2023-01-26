@@ -1,7 +1,7 @@
 MaizeModel
 ==============================
 
-A short description of the project.
+This repository is a copy of the one I created for [Kick et al. 2023.](https://academic.oup.com/g3journal/advance-article/doi/10.1093/g3journal/jkad006/6982634). For project reconstruction, I advise one download the files from Zenodo and follow the setup instructions. Due to the data's scale it is not included here. The code and setup instructions can be found here (https://zenodo.org/record/7401113) and the cleaned data is available here (https://zenodo.org/record/6916775). 
 
 Project Organization
 ------------
