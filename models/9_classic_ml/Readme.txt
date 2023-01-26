@@ -1,0 +1,1 @@
+conda env create -f \Users\Path\To\test_env.yaml

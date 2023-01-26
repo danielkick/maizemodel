@@ -1,0 +1,2389 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+library(tidyverse)
+library(patchwork)
+library(rjson)
+# c("#004785", "#005941"))
+```
+
+
+
+
+```{r}
+
+
+
+base_path <- "../models/"
+
+dirs <- c(
+  "3_finalize_model_syr__rep_G",       
+"3_finalize_model_syr__rep_S",      
+"3_finalize_model_syr__rep_W",      
+"3_finalize_model_syr__rep_cat",    
+"3_finalize_model_syr__rep_full")
+
+model_names <- c(
+  "Genome",
+  "Soil",
+  "Weather + Management",
+  "CO Interaction", 
+  "SO Interaction"
+)
+
+hpsjsons <- c(
+  "hps_rank_0.json", 
+  "hps_rank_3.json", 
+  "hps_rank_2.json", 
+  "hps_rank_1.json", 
+  "hps_rank_0.json")
+
+
+
+hps_list <- map(seq_along(dirs), function(i){
+  # parse json file
+  json_file <- paste0(base_path, dirs[i], '/', hpsjsons[i])
+  json_data <- fromJSON(read_file(json_file))
+  hps <- as.data.frame(unlist(json_data))
+  hps <- hps %>% rename(Value = `unlist(json_data)`)
+  hps[["Hyperparameter"]] <- rownames(hps)
+
+  
+  # parse python file
+  numEpoch_str <- stringr::str_extract(
+  read_file(paste0(base_path, dirs[i], '/', 'trainModel.py')), 
+  "numEpochs *= *\\d+")
+  numEpoch_str <- stringr::str_extract(numEpoch_str, "\\d+$")
+  numEpoch <- as.numeric(numEpoch_str)
+  
+  hps <- rbind(hps, c(numEpoch, "numEpoch"))
+  
+  # for rbind later
+  hps[["Model"]] <- model_names[i]
+  
+  return(hps)
+})
+
+M <- do.call(rbind, hps_list)
+
+# convert non-numeric values so they can be plotted
+M["label"] <- ""
+
+M[M$Hyperparameter == "pool_type_1d", "label"] = M[M$Hyperparameter == "pool_type_1d", "Value"]
+for(i in 1:2){
+  M[M$Value == c("ave1d", "max1d")[i], "Value"] <- as.character(i-1)
+}
+
+M$Value <- as.numeric(M$Value)
+
+
+
+
+
+max_values <- as.data.frame(rbind(
+c("g", "g_num_layers", 1, 7),
+c("s", "s_num_layers", 1, 7),
+c("x", "x_num_layers", 1, 7),
+# units
+c("g", "g_fc_units_", 4, 256),
+c("s", "s_fc_units_", 4, 64),
+c("x", "x_fc_units_", 4, 256),
+
+
+c("c1", "conv1d_num_layers", 1, 4),
+c("c1", "conv1d_num_layer_blocks", 1, 7),
+c("c1", "c1_filters_", 4, 512),
+c("c1", "pool_type_1d", 0, 1),
+
+# Dropout
+c("g", "g_fc_dropout_", 0, 0.3),
+c("s", "s_fc_dropout_", 0, 0.3),
+c("x", "x_fc_dropout_", 0, 0.3),
+
+# Optimizer
+c(".", "learning_rate", 0.0001, 0.1),
+c(".", "beta1", 0.9, 0.9999),
+c(".", "beta2", 0.9, 0.9999),
+c(".", "batch_size", 32, 256),
+c(".", "numEpoch", 0, 1000)
+)
+)
+names(max_values) <- c("SubModel", "NameRoot", "Min", "Max")
+
+max_values$Min <- as.numeric(max_values$Min)
+max_values$Max <- as.numeric(max_values$Max)
+
+
+M['NameRoot'] <- M$Hyperparameter
+
+
+tmp <- M[!(M$NameRoot %in% max_values$NameRoot), ]
+
+
+
+xx <- "x_fc_units_"
+
+## Make the NameRoot column in M match the values in max_values ====
+for(xx in max_values$NameRoot){
+  # should we match digits after the string?
+  match_digits <- stringr::str_detect(xx, "_$")
+  if(match_digits){
+    yy <- paste0(xx, "\\d+")
+  }else{
+    yy <- xx
+  }
+  
+  mask <- stringr::str_detect(M$NameRoot, yy)
+  
+  M[mask, 'NameRoot'] <- xx  
+}
+
+## Make the 
+M <- full_join(M, select(max_values, -SubModel))
+
+M['PrMax'] <- (M$Value - M$Min
+            )/(M$Max - M$Min)
+             
+M <- M %>% select(-NameRoot)
+
+
+write.csv(M, "../output/hps_long_temp.csv")
+```
+
+
+```{r}
+# Remove hyperparameters for layers that are not used.
+n_layer_hps <- c(
+  "g_num_layers",
+  "s_num_layers",
+  "conv1d_num_layer_blocks", #c1_
+  "x_num_layers"
+)
+
+lookfor_hps <- list(
+  # has n           # starts with
+  c("g_num_layers", "g_fc_"),
+  c("s_num_layers", "s_fc_"),
+  c("conv1d_num_layer_blocks", "c1_filters_"),
+  c("x_num_layers", "x_fc_"))
+
+# Model 
+# temp <- M[M$Model == "Genome", ]
+# 
+# i = 1
+# submodel = lookfor_hps[[i]][1]
+# submodel_hps = lookfor_hps[[i]][2]
+# 
+# n_layers <- temp[temp$Hyperparameter == submodel, "Value"]
+# 
+# mask_hps <- stringr::str_starts(temp$Hyperparameter, submodel_hps)
+# mask_lvl <- stringr::str_ends(temp$Hyperparameter, paste(seq(0, n_layers - 1), collapse = "|"))
+
+M$Drop <- FALSE
+
+
+model_array <- unique(M$Model)
+for(temp_model in model_array){
+  for(i in seq_along(lookfor_hps)){
+    
+    submodel = lookfor_hps[[i]][1]
+    submodel_hps = lookfor_hps[[i]][2]
+    
+    # Because of how this is set up it will try to run on all the hps (which is needed bc in CO all the submodels are together).
+    # This makes it important to check that we have data to work on first.
+    if(nrow(M[((M$Hyperparameter == submodel) & (M$Model == temp_model)), ]) != 0){
+        n_layers <- M[((M$Hyperparameter == submodel) & (M$Model == temp_model)), "Value"]
+      # match model, relevant hps, relevant levels
+      mask_model <- M$Model == temp_model
+      mask_hps <- stringr::str_starts(M$Hyperparameter, submodel_hps)
+      print(n_layers)
+      if(n_layers == 0){
+        mask_lvl <- stringr::str_ends(M$Hyperparameter, "0")    
+      } else {
+        mask_lvl <- stringr::str_ends(M$Hyperparameter, paste(seq(0, n_layers - 1), collapse = "|"))    
+      }
+  
+      # invert levels so we can flag those to be removed
+      mask_lvl <- !mask_lvl
+      
+      # Now we can simply filter and write to the `Drop` column
+      M[((mask_model) & (mask_hps) & (mask_lvl)), "Drop"] <- TRUE  
+    }
+  }
+}
+
+M <- M[!M$Drop, ] %>% select(-Drop)
+
+
+```
+
+
+```{r}
+# branch
+M <- full_join(M, data.frame(
+  stringsAsFactors = FALSE,
+    Hyperparameter = c("learning_rate","beta1",
+                       "beta2","g_num_layers","g_fc_units_0","g_fc_dropout_0",
+                       "g_fc_units_1","g_fc_dropout_1","batch_size","numEpoch",
+                       "s_num_layers","s_fc_units_0","s_fc_dropout_0",
+                       "s_fc_units_1","s_fc_dropout_1","s_fc_units_2",
+                       "s_fc_dropout_2","s_fc_units_3","s_fc_dropout_3","s_fc_units_4",
+                       "s_fc_dropout_4","s_fc_units_5","s_fc_dropout_5",
+                       "s_fc_units_6","s_fc_dropout_6","pool_type_1d",
+                       "conv1d_num_layer_blocks","conv1d_num_layers","c1_filters_0",
+                       "c1_filters_1","c1_filters_2","c1_filters_3","c1_filters_4",
+                       "c1_filters_5","c1_filters_6","x_num_layers",
+                       "x_fc_units_0","x_fc_dropout_0","x_fc_units_1","x_fc_dropout_1",
+                       "x_fc_units_2","x_fc_dropout_2","x_fc_units_3",
+                       "x_fc_dropout_3","x_fc_units_4","x_fc_dropout_4",
+                       "x_fc_units_5","x_fc_dropout_5"),
+        PreferName = c("Learning Rate","Beta 1",
+                       "Beta 2","Layers","Units in 0","Droput in 0","Units in 1",
+                       "Droput in 1","Batch Size","Epochs","Layers",
+                       "Units in 0","Droput in 0","Units in 1","Droput in 1",
+                       "Units in 2","Droput in 2","Units in 3","Droput in 3",
+                       "Units in 4","Droput in 4","Units in 5","Droput in 5",
+                       "Units in 6","Droput in 6","Pooling Type","Layers",
+                       "Repeats per Layer","Filters in 0","Filters in 1",
+                       "Filters in 2","Filters in 3","Filters in 4","Filters in 5",
+                       "Filters in 6","Layers","Units in 0","Droput in 0",
+                       "Units in 1","Droput in 1","Units in 2","Droput in 2",
+                       "Units in 3","Droput in 3","Units in 4","Droput in 4",
+                       "Units in 5","Droput in 5")
+))
+
+
+## Split, rename and combine (for calculating percents)
+co <- M[M$Model != "SO Interaction", ]
+so <- M[M$Model == "SO Interaction", ]
+
+co <- co %>% 
+  rename(SubModel = Model, co_value = Value, co_pr = PrMax) %>% 
+  mutate(SubModel = case_when(SubModel == "CO Interaction" ~ "Interaction",
+                              SubModel != "CO Interaction" ~ SubModel))
+  # mutate(Model = "CO Interaction")
+
+so <- so %>% 
+  rename(so_value = Value, so_pr = PrMax) %>% 
+  select(-Model)
+
+M_bb <- full_join(so, co) 
+
+# manually fix hps that only exist in SO
+#       so_value Hyperparameter label Min   Max     so_pr  PreferName co_value SubModel co_pr
+# 43 134.0000000   x_fc_units_5         4 256.0 0.5158730  Units in 5       NA     <NA>    NA
+# 44   0.1904766 x_fc_dropout_5         0   0.3 0.6349221 Droput in 5       NA     <NA>    NA
+
+M_bb[c((M_bb$Hyperparameter %in% c("x_fc_units_5", "x_fc_dropout_5")) & is.na(M_bb$SubModel)), "SubModel"] <- "Interaction"
+
+
+point_size = 1
+line_size = 1
+
+
+# Set up factor ordering
+M_bb <- M_bb %>% 
+  mutate(SubModel = case_when(SubModel == "Genome" ~ "a. Genomic",
+                                 SubModel == "Soil" ~ "b. Soil",
+                                 SubModel == "Weather + Management" ~ "c. Weather + Management",
+                                 SubModel == "Interaction" ~ "d. Interaction")) %>%
+  mutate(SubModel = factor(SubModel, levels = c("a. Genomic", "b. Soil", "c. Weather + Management", "d. Interaction")))
+
+
+new_order <- c(
+"Layers",  "Repeats per Layer", "Pooling Type",
+"Units in 0", "Units in 1", "Units in 2", "Units in 3", "Units in 4", "Units in 5", "Units in 6",
+"Droput in 0", "Droput in 1", "Droput in 2", "Droput in 3", "Droput in 4", "Droput in 5", "Droput in 6", 
+"Filters in 0", "Filters in 1", "Filters in 2", "Filters in 3", "Filters in 4", "Filters in 5", "Filters in 6", 
+"Learning Rate", "Beta 1", "Beta 2", "Batch Size", "Epochs"
+)
+
+M_bb$PreferName <- factor(M_bb$PreferName,
+                          levels = rev(new_order))
+
+
+
+
+
+plt_hps <- M_bb %>% 
+  mutate(`Network with Highest Value` = case_when(co_pr > so_pr ~ "DNN-CO",
+                               co_pr < so_pr ~ "DNN-SO")) %>% 
+  mutate(`Network with Highest Value` = case_when(is.na(`Network with Highest Value`) ~ "DNN-SO",
+                               !is.na(`Network with Highest Value`) ~ `Network with Highest Value`)) %>% 
+  ggplot()+
+  geom_segment(aes(x = so_pr, xend = co_pr, y = PreferName, yend = PreferName, color = `Network with Highest Value`),
+               size = line_size)+
+  geom_point(aes(x = so_pr, y = PreferName), size = point_size, color = "#004785")+
+  
+  geom_point(aes(x = co_pr, y = PreferName), size = point_size, color = "white")+  
+  geom_point(aes(x = co_pr, y = PreferName), size = point_size, color = "black", shape = 1)+
+  theme_minimal()+
+  scale_color_manual(values = c("#004785", "black"))+
+  scale_x_continuous(labels = scales::percent_format(scale = 100))+
+
+  # facet_wrap(.~SubModel, ncol = 4, scales = "free_y")+
+  facet_wrap(.~SubModel, ncol = 4, scales = "free_y")+
+  theme(legend.position = "bottom", axis.text.y = element_text(size = 6))+
+  labs(x = "Percent Max. Value", y = "Hyperparameter", title = "C. Submodel Percent Maximum Hyperparameter")#, subtitle = "", title = "B. Soil Saliences")
+
+plt_hps
+
+
+
+for( extention in c("svg", "pdf")){
+  ggsave(plot = plt_hps,
+       path = "../output",
+       # filename = paste0(c("R_hps.", extention), collapse = ""),  width = 6, height = 8)
+       filename = paste0(c("R_hps.", extention), collapse = ""),  width = 10, height = 5)
+}
+
+
+write.csv(M_bb, "../output/hps_temp.csv")
+```
+
+
+
+# Publication Figures
+
+## Performance
+
+```{r}
+M <- read.csv("../output/r_performance_across_models.csv")
+# for validating calculation of RMSE, R2 below
+DNN_Res <- M %>% filter(model_class == "DNN") %>% 
+  select(key0, key1, train_rmse, train_r2, test_rmse, test_r2) %>% 
+  rename(Model = key0, Num = key1)
+
+# library(ggh4x)
+
+# set rmse as non-zscore (multiply by testing sd)
+# M <- M %>% 
+#   mutate(train_rmse = train_rmse*48.169,
+#          test_rmse = test_rmse*48.169)
+
+
+# case when to set numerics to dnn
+M <- M %>% 
+  mutate(model = 
+           case_when(
+            model == "KNN" ~ "KNN",
+            model == "Rand.Forest" ~ "RF",
+            model == "Radius NR" ~ "RNR",
+            model == "SVR (linear)" ~ "SVR",
+            model == "DNN-Con." ~ "DNN-CO",
+            model == "DNN-Sim." ~ "DNN-SO",
+            
+            model == "LM" ~ "LM",            
+            
+            model == "BLUP" ~ "BLUP",
+            model == "Training Mean" ~ "Mean"
+))
+
+# order the facets
+M$model <- factor(M$model, levels = c(
+  "Mean", "LM", "BLUP", "KNN", "RNR", "RF", "SVR", "DNN-CO", "DNN-SO"))
+       
+M$model_class <- factor(M$model_class, levels = c("LM", "BLUP", "ML", "DNN"))
+M$data_source <- factor(M$data_source, levels = c("G", "S", "W", "Multi"))
+
+
+# M <- M %>% 
+#   mutate(model2 = fct_relevel(model, 
+#                              c("Mean", "LM-F", "LM-R", "KNN", "RM", "RNR", "SVR", "DNN-CO", "DNN-SO"))) 
+
+M <-  M %>% 
+  mutate(data_source = case_when(data_source == "G" ~ "a. Genomic",
+                                 data_source == "S" ~ "b. Soil",
+                                 data_source == "W" ~ "c. Weather + Management",
+                                 data_source == "Multi" ~ "d. Mulitple Types")) %>% 
+  mutate(data_source = factor(data_source, 
+                              levels = c("a. Genomic", "b. Soil", "c. Weather + Management", "d. Mulitple Types")))
+
+
+
+# DNN performance stats
+M %>% 
+  filter(model_class == "DNN") %>% 
+  group_by(model, data_source) %>% 
+  summarise(med = median(test_rmse), 
+            iqr = IQR(test_rmse), 
+            xbar= mean(test_rmse), 
+            sd  = sd(test_rmse))
+
+model_performance_stats <-
+M %>% 
+  mutate(test_normRMSE = test_normRMSE*100) %>%
+  group_by(model, annotation, data_source) %>% 
+  summarise(
+    # rmse_median = median(test_rmse), 
+    # rmse_iqr = IQR(test_rmse), 
+    rmse_mean= mean(test_rmse), 
+    rmse_sd  = sd(test_rmse),
+    
+    # normPrRMSE_median = median(test_normRMSE), 
+    # normPrRMSE_iqr = IQR(test_normRMSE), 
+    normPrRMSE_mean= mean(test_normRMSE), 
+    normPrRMSE_sd  = sd(test_normRMSE), 
+    
+    r_mean= mean(test_r), 
+    r_sd  = sd(test_r)
+    )
+
+write.csv(model_performance_stats, '../output/model_performance_stats.csv')
+
+M.backup <- M
+
+# the best models in RMSE are the same as in R2
+# lmlike_r2 <- M %>% filter(source == "lmlike_res")
+# lmlike_r2 %>% 
+#   group_by(key0, model) %>% 
+#   mutate(filt = test_r2 == max(test_r2)) %>% 
+#   filter(filt) %>% 
+#   select(key0, key1, model, annotation, test_r2)
+
+
+# M <- M_rmse
+
+plt_rmse <- M %>%
+  filter(model != "Mean") %>%
+  mutate(Class = model_class) %>%
+  ggplot(aes(x = model, y = test_rmse))+
+    geom_hline(yintercept = unique(M[M$model == "Mean", 'test_rmse']), color = "darkgray" )+#, linetype = 'dashed')+
+    geom_point()+
+    geom_point(aes(color = Class))+
+    geom_boxplot(data = M[M$key1 %in% c(as.character(seq(0, 9)), "lm", "BLUP", "knn", "rnr", "svrl", "rf"), ], width = 0.3, fill = "#00000000")+
+    facet_wrap(.~data_source, nrow = 1, scales = 'free_x')+
+    theme_minimal()+
+    theme(legend.position = "", axis.text.x=element_text(size=6, angle = 45, hjust = 1))+
+    scale_color_brewer(type = "qual", palette = "Set2")+
+    labs(x = "", y = "RMSE", subtitle = "", title = "A. Performance on Test Set in Root Mean Squared Error")
+
+plt_rmse
+
+
+# M <- M_r2
+plt_r2 <- M %>% 
+  filter(model != "Mean") %>% 
+  mutate(Class = model_class) %>% 
+  
+  ggplot(aes(x = model, y = test_r2))+
+
+  geom_point()+ 
+  geom_point(aes(color = Class))+
+  geom_boxplot(data = M[M$key1 %in% c(as.character(seq(0, 9)), "lm", "BLUP", "knn", "rnr", "svrl", "rf"), ], width = 0.3, fill = "#00000000")+
+  facet_wrap(.~data_source, nrow = 1, scales = 'free_x')+
+  theme_minimal()+
+  theme(legend.position = "", axis.text.x=element_text(size=6, angle = 45, hjust = 1))+
+  scale_color_brewer(type = "qual", palette = "Set2")+
+  labs(x = "", y = expression(R^2, parse = TRUE), subtitle = "", title = expression("A. Performance on Test Set in R"^2, parse = TRUE) )
+
+plt_r2
+
+
+plt_r <- M %>% 
+  filter(model != "Mean") %>% 
+  mutate(Class = model_class) %>% 
+  
+  ggplot(aes(x = model, y = test_r))+
+
+  geom_point()+ 
+  geom_point(aes(color = Class))+
+  geom_boxplot(data = M[M$key1 %in% c(as.character(seq(0, 9)), "lm", "BLUP", "knn", "rnr", "svrl", "rf"), ], width = 0.3, fill = "#00000000")+
+  facet_wrap(.~data_source, nrow = 1, scales = 'free_x')+
+  theme_minimal()+
+  theme(legend.position = "", axis.text.x=element_text(size=6, angle = 45, hjust = 1))+
+  scale_color_brewer(type = "qual", palette = "Set2")+
+  labs(x = "", y = expression(r, parse = TRUE), subtitle = "", title = expression("A. Performance on Test Set in r", parse = TRUE) )
+
+plt_r
+
+
+for( extention in c("svg", "pdf")){
+  ggsave(plot = plt_rmse,
+       path = "../output",
+       filename = paste0(c("R_Performance_rmse.", extention), collapse = ""),  width = 8.5, height = 11/2)
+
+  ggsave(plot = plt_r2,
+       path = "../output",
+       filename = paste0(c("R_Performance_r2.", extention), collapse = ""),  width = 8.5, height = 11/2)
+  
+  ggsave(plot = plt_r,
+       path = "../output",
+       filename = paste0(c("R_Performance_r.", extention), collapse = ""),  width = 8.5, height = 11/2)
+}
+```
+
+
+## Performance by Location
+
+### DNN
+
+```{r}
+file_list <- list.files("../output/")
+# pull all those files which begin with errorConditional and are csvs
+# and specific to DNN
+file_list <- file_list[stringr::str_detect(file_list, "errorConditionalDNN_.+csv")]
+
+file_list <- map(file_list, function(e){ read.csv(paste0("../output/", e)) })
+
+# file_list[[1]] %>% head()
+
+
+M <- do.call(rbind, file_list)
+
+
+# get summary stats for each
+MSum <- M %>% 
+  pivot_longer(cols = c(
+  "yHat_Rep0", "yHat_Rep1", "yHat_Rep2", "yHat_Rep3", "yHat_Rep4", 
+  "yHat_Rep5", "yHat_Rep6", "yHat_Rep7", "yHat_Rep8", "yHat_Rep9")) %>% 
+  rename(Replicate = name, yHat = value) %>% 
+  mutate(Replicate = stringr::str_extract(Replicate, "\\d+$")) %>% 
+  group_by(Model, Replicate, Split, Year, ExperimentCode) %>% 
+  summarise(RMSE = sqrt(mean((y - yHat)^2)),
+            #https://scikit-learn.org/stable/modules/generated/sklearn.metrics.r2_score.html
+            R2   = (1 - (sum((y - yHat)**2)/ 
+                         sum((y - mean(y))**2))),
+            r    = cor(y, yHat, method = "pearson"),
+            sdyHat    = sd(yHat) 
+# Most weather models have no variance in these predictions
+# This makes sense because we're conditioning on site-year so the weather inputs are identical. However, not all are inputs are identical because some sites are grouped based on gps coordinates. This explains why not all sites-year groups have identical yHats and therefore NA cors.  
+            ) %>% 
+  ungroup()
+  # mutate(rmse = sqrt(mean((y - yHat)^2)) )
+```
+
+
+```{r eval=FALSE, include=FALSE}
+# for validating RMSE, R2 calculations:
+DNN_Res 
+
+M_temp <- M %>% 
+  pivot_longer(cols = c(
+  "yHat_Rep0", "yHat_Rep1", "yHat_Rep2", "yHat_Rep3", "yHat_Rep4", 
+  "yHat_Rep5", "yHat_Rep6", "yHat_Rep7", "yHat_Rep8", "yHat_Rep9")) %>% 
+  rename(Replicate = name, yHat = value) %>% 
+  select(Model, Replicate, Split, y, yHat)
+
+
+Model = "G"
+RepNum = 0
+
+# because these are floats there may be very small differences that are acceptable
+tol = 1e-14
+
+for(Model in c("G", "S", "W", "full", "cat")){
+  print(paste(Model, "------------------------------"))
+  for(RepNum in seq(0, 9)){
+    
+    mask = ((DNN_Res$Model == Model) & (DNN_Res$Num == RepNum))
+    DNN_Res[mask,]
+    
+    train_mask = ((M_temp$Model == Model
+              ) & (M_temp$Replicate == paste0("yHat_Rep", as.character(RepNum))
+              ) & (M_temp$Split == "Train"))
+    test_mask  = ((M_temp$Model == Model
+              ) & (M_temp$Replicate == paste0("yHat_Rep", as.character(RepNum))
+              ) & (M_temp$Split == "Test"))
+    
+    get_rmse_r2 <- function(y, yHat){
+      RMSE = sqrt(mean((y - yHat)^2))
+      
+      R2   = (1 - (sum((y - yHat)**2)/ 
+                   sum((y - mean(y))**2)))  
+      
+      return(c(RMSE, R2))
+    }
+    
+    train_vals <- get_rmse_r2(
+      y = unlist(M_temp[train_mask, "y"]),
+      yHat = unlist(M_temp[train_mask, "yHat"])
+      )
+    test_vals <- get_rmse_r2(
+      y = unlist(M_temp[test_mask, "y"]),
+      yHat = unlist(M_temp[test_mask, "yHat"])
+      )
+    
+    # DNN_Res[mask, c("Model", "Num")]
+    print(paste("Replicate", as.character(RepNum)))
+    diffs <- (DNN_Res[mask, c("train_rmse", "train_r2", "test_rmse", "test_r2")] - c(train_vals, test_vals))
+    if( mean(diffs < tol) != 1){
+      print(diffs)
+    } 
+  }
+}
+print("Where differences are below tollerance they are not reported")
+
+
+
+
+
+
+
+```
+
+Differences look to be from precision in storage not calculation
+
+| . |rep |  train_rmse   | train_r2      | test_rmse    | test_r2       |
+|---|----|---------------|---------------|--------------|---------------|
+| G | 0  |  0            |  0            | 0            |  2.220446e-16 |
+| G | 1  |  0            |  1.110223e-16 | 0            |  0            |
+| G | 2  |  0            |  1.110223e-16 | 0            |  0            |
+| G | 4  |  0            |  1.110223e-16 | 0            |  0            |
+| G | 6  |  1.110223e-16 | -1.110223e-16 | 0            |  2.220446e-16 |
+| G | 9  | -1.110223e-16 |  1.110223e-16 | 0            |  0            |
+| S | 3  | -1.110223e-16 |  2.220446e-16 | 0            |  0            |
+| W | 0  |  1.110223e-16 | -1.110223e-16 | 0            |  0            |
+| W | 1  |  1.110223e-16 | -1.110223e-16 | 0            |  0            |
+| W | 2  |            0  |  1.110223e-16 | 0            |  2.220446e-16 |
+| W | 5  | -1.110223e-16 |  1.110223e-16 | 0            |  0            |
+| SO| 0  |  0            |  0            | 2.220446e-16 | -2.220446e-16 |
+| SO| 5  |  5.551115e-17 |  0            | 0            |  0            |
+| CO| 2  |  3.552714e-15 | -5.684342e-14 | 0            | -1.110223e-16 |
+| CO| 7  |  1.110223e-16 |  0            | 0            |  0            |
+| CO| 8  |  0            |  0            |-1.110223e-16 |  1.110223e-16 |
+| CO| 9  |  1.110223e-16 |  0            | 0            |  0            |
+
+
+
+```{r}
+# add in data used and update model names
+MSum <- MSum %>% 
+  mutate(
+    data_source = case_when(
+      Model == "full" ~ "Multi",
+      Model == "cat" ~ "Multi",
+      Model == "G" ~ "G",
+      Model == "S" ~ "S",
+      Model == "W" ~ "W")) %>% 
+  mutate(
+    data_source = case_when(
+      data_source == "G" ~ "a. Genomic",
+      data_source == "S" ~ "b. Soil",
+      data_source == "W" ~ "c. Weather + Management",
+      data_source == "Multi" ~ "d. Mulitple Types")) %>% 
+  mutate(data_source = factor(
+    data_source, levels = c("a. Genomic", 
+                            "b. Soil", 
+                            "c. Weather + Management", 
+                            "d. Mulitple Types"))) %>% 
+  mutate(Model = case_when(
+    Model == "full" ~ "DNN-SO",
+    Model != "full" ~ "DNN-CO"))
+
+
+Mplt <- MSum %>% 
+  filter(Split == "Test") %>% 
+  mutate(ExperimentCode2 = paste(ExperimentCode, Year, sep = ": "),
+         plt_group = paste(data_source, Model, sep = ": "))
+```
+
+#### Possible visualizations 
+```{r eval=FALSE, include=FALSE}
+library(ggdist) # https://www.cedricscherer.com/2021/06/06/visualizing-distributions-with-raincloud-plots-and-how-to-create-them-with-ggplot2/
+rmse_range = max(Mplt$RMSE)-min(Mplt$RMSE)
+
+set_ylim_all = c(min(Mplt$RMSE) - rmse_range*0.1, 
+                 max(Mplt$RMSE) + rmse_range*0.1)
+
+
+
+
+main_boxplots <- map(
+  sort(unique(Mplt$plt_group)),
+  function(plt_group){
+    ggplot(Mplt[Mplt$plt_group == plt_group, ], aes(ExperimentCode2, RMSE))+
+    geom_point(color = "cornflowerblue", alpha = 0.3)+
+    geom_point(color = "cornflowerblue", shape = 1)+
+    geom_boxplot( width = 0.3, fill = "#00000000")+
+    coord_cartesian(xlim = c(1.2, NA), 
+                    ylim = set_ylim_all)+
+    theme_minimal()+
+    labs(x = NULL, y = NULL, 
+         title = unlist(unique(Mplt[Mplt$plt_group == plt_group, "data_source"]))#,
+         # subtitle = unlist(unique(Mplt[Mplt$plt_group == plt_group, "Model"]))
+         )+
+    theme(#legend.position = "", 
+      axis.text.x=element_text(size=6, angle = 45, hjust = 1))+
+      facet_grid(.~Model)
+  }
+)
+
+
+marginal_boxplots <- map(
+  sort(unique(Mplt$plt_group)),
+  function(plt_group){
+    
+    ggplot(Mplt[Mplt$plt_group == plt_group, ], aes(x = plt_group, y = RMSE))+
+      ggdist::stat_halfeye(
+        adjust = .5,
+        width = .6, 
+        .width = c(.5, .95) # slab interval == IQR and 95%
+      ) + 
+      ggdist::stat_dots(
+        side = "left", 
+        dotsize = .1,
+        justification = 1.05, 
+        binwidth = .03
+      ) +
+      coord_cartesian(xlim = c(1.2, NA), 
+                      ylim = set_ylim_all)+
+      # theme_void()
+      theme_minimal()+
+      theme(axis.text.x = element_text(color =  "#00000000"),
+            axis.text.y = element_blank()
+            )+
+      labs(y = NULL, x = NULL)
+  }
+)
+
+
+main_boxplots[[1]]+ylab("RMSE") + marginal_boxplots[[1]] +
+main_boxplots[[2]] + marginal_boxplots[[2]] +
+main_boxplots[[3]] + marginal_boxplots[[3]] +
+main_boxplots[[4]] + marginal_boxplots[[4]] +
+main_boxplots[[5]]+labs(title = NULL) + marginal_boxplots[[5]] + plot_layout(
+  ncol = 10,
+  nrow = 1, widths = c(1, 0.2))
+```
+
+
+```{r eval=FALSE, include=FALSE}
+main_boxplots[[1]] +
+main_boxplots[[2]] +
+main_boxplots[[3]] +
+main_boxplots[[4]] +
+main_boxplots[[5]]+labs(title = NULL) + plot_layout(
+  ncol = 5,
+  nrow = 1)
+```
+
+
+```{r eval=FALSE, include=FALSE}
+layout <- "
+AAAAB
+"
+main_boxplots[[1]] + marginal_boxplots[[1]] + plot_layout(design = layout)
+```
+
+
+Simpler version without marginals
+
+```{r}
+set_ylim_all_r2   = c(-13, 1)
+set_ylim_all_rmse = c(0.4, 2.8)
+set_ylim_all_r    = c(-1, 1)
+```
+
+
+```{r}
+# Because we're conditioning on site-year we want to ignore the soil/weather models
+Mplt <- Mplt %>% 
+  filter(plt_group %in% c(
+    "a. Genomic: DNN-CO", 
+    # "b. Soil: DNN-CO", 
+    # "c. Weather + Management: DNN-CO", 
+    "d. Mulitple Types: DNN-CO",
+    "d. Mulitple Types: DNN-SO"
+))
+
+
+
+
+facet_lab_list <- c("a. Genomic\n", 
+                    # "b. Soil\n", 
+                    # "c. Weather + Management\n", 
+                    "b. Mulitple Types: \nDNN-CO", 
+                    "c. Mulitple Types: \nDNN-SO")
+
+names(facet_lab_list) <- c("a. Genomic: DNN-CO", 
+                    # "b. Soil: DNN-CO", 
+                    # "c. Weather + Management: DNN-CO", 
+                    "d. Mulitple Types: DNN-CO",
+                    "d. Mulitple Types: DNN-SO")
+
+plt_rmse_cond <-
+  ggplot(Mplt, aes(ExperimentCode2, RMSE))+
+  geom_point(aes(color = plt_group), alpha = 0.3)+
+  geom_point(aes(color = plt_group), shape = 1)+
+  geom_boxplot( width = 0.3, fill = "#00000000")+ # original width
+  # geom_boxplot( width = 0.1, fill = "#00000000")+
+  theme_minimal()+
+  theme(legend.position = "", 
+        axis.text.x=element_text(size=6, angle = 45, hjust = 1))+
+  scale_color_manual(values = c("#238b45", #"#d94801", "#fcba03", 
+                                "#7a0177",
+                                "#80607f"))+
+  facet_grid(.~plt_group, labeller=labeller(plt_group = facet_lab_list))+
+  labs(x = NULL, 
+       y = expression(RMSE, parse = TRUE), 
+       subtitle = "", 
+       title = expression("A. DNN Performance on Test Set by Site-by-Year Group", parse = TRUE) )+
+  coord_cartesian(ylim = set_ylim_all_rmse)
+
+plt_r2_cond <- 
+  ggplot(Mplt, aes(ExperimentCode2, R2))+
+  geom_point(aes(color = plt_group), alpha = 0.3)+
+  geom_point(aes(color = plt_group), shape = 1)+
+  geom_boxplot( width = 0.3, fill = "#00000000")+ # original width
+  # geom_boxplot( width = 0.1, fill = "#00000000")+
+  theme_minimal()+
+  theme(legend.position = "", 
+        axis.text.x=element_text(size=6, angle = 45, hjust = 1))+
+  scale_color_manual(values = c("#238b45", #"#d94801", "#fcba03", 
+                                "#7a0177",
+                                "#80607f"))+
+  facet_grid(.~plt_group, labeller=labeller(plt_group = facet_lab_list))+
+  labs(x = NULL, 
+       y = expression(R**2, parse = TRUE), 
+       subtitle = "", 
+       title = expression("A. DNN Performance on Test Set by Site-by-Year Group", parse = TRUE) )+
+  coord_cartesian(ylim = set_ylim_all_r2)
+
+
+plt_r_cond <- 
+  ggplot(Mplt, aes(ExperimentCode2, r))+
+  geom_point(aes(color = plt_group), alpha = 0.3)+
+  geom_point(aes(color = plt_group), shape = 1)+
+  geom_boxplot( width = 0.3, fill = "#00000000")+ # original width
+  # geom_boxplot( width = 0.1, fill = "#00000000")+
+  theme_minimal()+
+  theme(legend.position = "", 
+        axis.text.x=element_text(size=6, angle = 45, hjust = 1))+
+  scale_color_manual(values = c("#238b45", #"#d94801", "#fcba03", 
+                                "#7a0177",
+                                "#80607f"))+
+  facet_grid(.~plt_group, labeller=labeller(plt_group = facet_lab_list))+
+  labs(x = NULL, 
+       y = expression(r, parse = TRUE), 
+       subtitle = "", 
+       title = expression("A. DNN Performance on Test Set by Site-by-Year Group", parse = TRUE) )+
+  coord_cartesian(ylim = set_ylim_all_r)
+
+
+
+plt_rmse_cond+plt_r_cond
+
+
+# for( extention in c("svg", "pdf")){
+#   ggsave(plot = plt_rmse_cond,
+#        path = "../output",
+#        filename = paste0(c("R_Performance_rmse_DNN_cond.", extention), collapse = ""),  width = 8.5, height = 11/2)
+# 
+#   ggsave(plot = plt_r2_cond,
+#        path = "../output",
+#        filename = paste0(c("R_Performance_r2_DNN_cond.", extention), collapse = ""),  width = 8.5, height = 11/2)
+#   
+#     ggsave(plot = plt_r_cond,
+#        path = "../output",
+#        filename = paste0(c("R_Performance_r_DNN_cond.", extention), collapse = ""),  width = 8.5, height = 11/2)
+# }
+
+
+
+
+```
+
+```{r}
+MpltDNN <- Mplt
+# Mplt$Model %>% unique()
+
+# overwrite so we can get all combinations at once
+# Mplt$data_source <- as.character(Mplt$data_source)
+# Mplt[Mplt$Model == "DNN-SO", "data_source"] = "DNN-SO"
+# Mplt$Model <- Mplt$data_source
+
+Mpltcsv <- Mplt %>% 
+  filter(Split == "Test") %>% 
+  select(plt_group, ExperimentCode2, RMSE, r) %>% 
+  group_by(plt_group, ExperimentCode2) %>% 
+  mutate(
+    SDRMSE = sd(RMSE),
+    AveRMSE = mean(RMSE),
+    SDr = sd(r),
+    Aver = mean(r)
+    ) %>% 
+  select(-RMSE, -r) %>% 
+  distinct() %>% 
+  mutate(plt_group  = case_when(
+    plt_group  == "a. Genomic: DNN-CO" ~ "Genomic: DNN-CO",
+    plt_group  == "d. Mulitple Types: DNN-CO" ~ "Multiple Types: DNN-CO",
+    plt_group  == "d. Mulitple Types: DNN-SO" ~ "Multiple Types: DNN-SO")) %>% 
+  rename(SiteByYear =  ExperimentCode2,
+         Model = plt_group)
+  
+write.csv(Mpltcsv, "../output/z_site_x_year_COND_split_DNN.csv")
+```
+
+
+### BLUP (`BGLR` RKHS)
+
+```{r}
+file_list <- list.files("../output/")
+# pull all those files which begin with errorConditional and are csvs 
+# and specific to the RKHS models
+file_list <- file_list[stringr::str_detect(file_list, "errorConditionalRKHS_.+csv")]
+
+file_list <- map(file_list, function(e){ read.csv(paste0("../output/", e)) })
+
+M <- do.call(rbind, file_list)
+
+# get summary stats for each
+MSum <- M %>% 
+  pivot_longer(cols = c(
+  "yHat_Rep0", "yHat_Rep1", "yHat_Rep2", "yHat_Rep3", "yHat_Rep4", 
+  "yHat_Rep5", "yHat_Rep6", "yHat_Rep7", "yHat_Rep8", "yHat_Rep9")) %>% 
+  rename(Replicate = name, yHat = value) %>% 
+  mutate(Replicate = stringr::str_extract(Replicate, "\\d+$")) %>% 
+  group_by(Model, Replicate, Split, Year, ExperimentCode) %>% 
+  summarise(RMSE = sqrt(mean((y - yHat)^2)),
+            #https://scikit-learn.org/stable/modules/generated/sklearn.metrics.r2_score.html
+            R2   = (1 - (sum((y - yHat)**2)/ 
+                         sum((y - mean(y))**2))),
+            r    = cor(y, yHat, method = "pearson") ) %>% 
+  ungroup()
+```
+
+
+
+```{r}
+# add in data used and update model names
+MSum <- MSum %>% 
+  mutate(
+    data_source = Model) %>% 
+  mutate(
+    data_source = case_when(
+      data_source == "G" ~ "a. Genomic",
+      data_source == "S" ~ "b. Soil",
+      data_source == "W" ~ "c. Weather + Management",
+      data_source == "Multi" ~ "d. Mulitple Types")) %>% 
+  mutate(data_source = factor(
+    data_source, levels = c("a. Genomic", 
+                            "b. Soil", 
+                            "c. Weather + Management", 
+                            "d. Mulitple Types"))) 
+
+Mplt <- MSum %>% 
+  filter(Split == "Test") %>% 
+  mutate(ExperimentCode2 = paste(ExperimentCode, Year, sep = ": "),
+         plt_group = paste(data_source, Model, sep = ": "))
+```
+
+
+```{r}
+Mplt <- Mplt %>% filter(data_source %in% c("a. Genomic", 
+                    # "b. Soil", 
+                    # "c. Weather + Management", 
+                    "d. Mulitple Types"))
+
+
+
+
+facet_lab_list <- c("d. Genomic\n", 
+                    # "b. Soil\n", 
+                    # "c. Weather + Management\n", 
+                    "e. Mulitple Types\n")
+
+names(facet_lab_list) <- c("a. Genomic", 
+                    # "b. Soil", 
+                    # "c. Weather + Management", 
+                    "d. Mulitple Types")
+
+
+plt_rmse_RKHS_cond <- 
+  ggplot(Mplt, aes(ExperimentCode2, RMSE))+
+  geom_point(aes(color = data_source), alpha = 0.3)+
+  geom_point(aes(color = data_source), shape = 1)+
+  geom_boxplot( width = 0.3, fill = "#00000000")+ # original width
+  # geom_boxplot( width = 0.1, fill = "#00000000")+
+  theme_minimal()+
+  theme(legend.position = "", 
+        axis.text.x=element_text(size=6, angle = 45, hjust = 1))+
+  scale_color_manual(values = c("#238b45", #"#d94801", "#fcba03", 
+                                "#7a0177"#,"#80607f"
+                                ))+
+  facet_grid(.~data_source, labeller=labeller(data_source = facet_lab_list))+
+  labs(x = NULL, 
+       y = expression(RMSE, parse = TRUE), 
+       subtitle = "", 
+       title = expression("A. BLUP Performance on Test Set by Site-by-Year Group", parse = TRUE) )+
+  coord_cartesian(ylim = set_ylim_all_rmse)
+
+plt_r2_RKHS_cond <- 
+  ggplot(Mplt, aes(ExperimentCode2, R2))+
+  geom_point(aes(color = data_source), alpha = 0.3)+
+  geom_point(aes(color = data_source), shape = 1)+
+  geom_boxplot( width = 0.3, fill = "#00000000")+ # original width
+  # geom_boxplot( width = 0.1, fill = "#00000000")+
+  theme_minimal()+
+  theme(legend.position = "", 
+        axis.text.x=element_text(size=6, angle = 45, hjust = 1))+
+  scale_color_manual(values = c("#238b45", #"#d94801", "#fcba03", 
+                                "#7a0177"#, "#80607f"
+                                ))+
+  facet_grid(.~data_source, labeller=labeller(data_source = facet_lab_list))+
+  labs(x = NULL, 
+       y = expression(R**2, parse = TRUE), 
+       subtitle = "", 
+       title = expression("A. BLUP Performance on Test Set by Site-by-Year Group", parse = TRUE) )+
+  coord_cartesian(ylim = set_ylim_all_r2)
+
+
+plt_r_RKHS_cond <- 
+  ggplot(Mplt, aes(ExperimentCode2, r))+
+  geom_point(aes(color = data_source), alpha = 0.3)+
+  geom_point(aes(color = data_source), shape = 1)+
+  geom_boxplot( width = 0.3, fill = "#00000000")+ # original width
+  # geom_boxplot( width = 0.1, fill = "#00000000")+
+  theme_minimal()+
+  theme(legend.position = "", 
+        axis.text.x=element_text(size=6, angle = 45, hjust = 1))+
+  scale_color_manual(values = c("#238b45", #"#d94801", "#fcba03", 
+                                "#7a0177"#, "#80607f"
+                                ))+
+  facet_grid(.~data_source, labeller=labeller(data_source = facet_lab_list))+
+  labs(x = NULL, 
+       y = expression(R**2, parse = TRUE), 
+       subtitle = "", 
+       title = expression("A. BLUP Performance on Test Set by Site-by-Year Group", parse = TRUE) )+
+  coord_cartesian(ylim = set_ylim_all_r)
+
+
+# for( extention in c("svg", "pdf")){
+#   ggsave(plot = plt_rmse_RKHS_cond,
+#        path = "../output",
+#        filename = paste0(c("R_Performance_rmse_RKHS_cond.", extention), collapse = ""),  width = 8.5, height = 11/2)
+# 
+#   ggsave(plot = plt_r2_RKHS_cond,
+#        path = "../output",
+#        filename = paste0(c("R_Performance_r2_RKHS_cond.", extention), collapse = ""),  width = 8.5, height = 11/2)
+# 
+#   ggsave(plot = plt_r_RKHS_cond,
+#        path = "../output",
+#        filename = paste0(c("R_Performance_r_RKHS_cond.", extention), collapse = ""),  width = 8.5, height = 11/2)
+# }
+```
+
+
+```{r}
+# Mplt$Model %>% unique()
+
+Mpltcsv <- Mplt %>% 
+  filter(Split == "Test") %>% 
+  select(Model , ExperimentCode2, RMSE, r) %>% 
+  group_by(Model, ExperimentCode2) %>% 
+  mutate(
+    SDRMSE = sd(RMSE),
+    AveRMSE = mean(RMSE),
+    SDr = sd(r),
+    Aver = mean(r)
+    ) %>% 
+  select(-RMSE, -r) %>% 
+  distinct() %>% 
+  mutate(Model = case_when(Model == "G" ~ "Genomic",
+                           Model == "Multi" ~ "Multiple Types")) %>% 
+  rename(SiteByYear =  ExperimentCode2)
+  
+write.csv(Mpltcsv, "../output/z_site_x_year_COND_split_RKHS.csv")
+```
+
+
+
+
+```{r}
+yrmse = c(0.45, 2)
+yr = c(-0.15, 0.625)
+
+plt_combined_cond <-
+plt_rmse_cond+
+  labs(title = "A. Performance in RMSE on Site-by-Year Groups", 
+       subtitle = "Deep Neural Networks")+
+  coord_cartesian(ylim = yrmse)+
+plt_rmse_RKHS_cond+
+  labs(title = "",
+       subtitle = "Best Linear Unbiased Predictors", y = NULL)+
+  coord_cartesian(ylim = yrmse)+
+plt_r_cond+
+  labs(title = "B. Performance in r on Site-by-Year Groups", 
+       subtitle = "Deep Neural Networks")+
+  coord_cartesian(ylim = yr)+ 
+plt_r_RKHS_cond+
+  labs(title = "",
+       subtitle = "Best Linear Unbiased Predictors", y = NULL)+
+  coord_cartesian(ylim = yr)+ patchwork::plot_layout(nrow = 2, ncol =2, 
+                                                     widths = c(3+0.025, 2))
+
+
+
+plt_combined_cond
+
+for( extention in c("svg", "pdf")){
+  ggsave(plot = plt_combined_cond,
+       path = "../output",
+       filename = paste0(c("R_Performance_combined_cond.", extention), collapse = ""),  
+       width = 8.5, 
+       # height = 11/2
+       height = 7
+       )
+
+}
+```
+
+
+```{r}
+MpltDNN
+
+
+# GET EQUATION AND R-SQUARED AS STRING
+# SOURCE: https://groups.google.com/forum/#!topic/ggplot2/1TgH-kG5XMA
+
+lm_eqn <- function(df){
+    df <- rename(df, y = BLUPRMSE, x = DNNRMSE)
+    m <- lm(y ~ x, df);
+    eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2, 
+         list(a = format(unname(coef(m)[1]), digits = 2),
+              b = format(unname(coef(m)[2]), digits = 2),
+             r2 = format(summary(m)$r.squared, digits = 3)))
+    as.character(as.expression(eq));
+}
+
+# p1 <- p + geom_text(x = 25, y = 300, label = lm_eqn(df), parse = TRUE)
+
+
+
+# out of curiosity how do different models line up on error?
+
+quick_plt <- function(
+  DNNSelect = "a. Genomic: DNN-CO",
+  BLUPSelect= "G",
+  lims = c(0.4, 2.1)
+  ){
+  tmpDNN  <- MpltDNN[MpltDNN$plt_group == DNNSelect, ] %>% select(ExperimentCode, Year, Replicate, RMSE) %>% rename(DNNRMSE = RMSE)
+  tmpBLUP <- Mplt[Mplt$Model == BLUPSelect, ] %>% select(ExperimentCode, Year, Replicate, RMSE) %>% rename(BLUPRMSE = RMSE)
+  
+  tmp <- full_join(tmpDNN, tmpBLUP) %>% 
+    group_by(ExperimentCode, Year) %>% 
+    mutate(Cor = cor(DNNRMSE, BLUPRMSE))
+  
+  plt <- ggplot(tmp, aes(DNNRMSE, BLUPRMSE, color = Cor))+
+    geom_abline(slope = 1, intercept = 0)+
+    geom_smooth(linetype = "dashed", method = "lm", se = F, fullrange = TRUE, color = 'black')+
+    geom_point()+
+    geom_point(color = "black", shape = 1, alpha = 0.3)+
+    # coord_()+
+    geom_text(x = 1., y = 1.875, label = lm_eqn(tmp)[1], parse = T, color = 'black')+
+    coord_cartesian(xlim = lims, ylim = lims)+
+    theme_minimal()+
+    # scale_color_gradient2()
+    scale_color_gradientn(limits = c(-3,3),
+      colours=c("darkred", "white", "darkblue"),
+      breaks=c(-1,0,1)#, labels=format(b)
+      )+
+    # labs(title = paste(DNNSelect, "vs", BLUPSelect))+
+    labs(
+      x = case_when(
+        DNNSelect ==        "a. Genomic: DNN-CO" ~ "Genomic DNN", 
+        DNNSelect == "d. Mulitple Types: DNN-CO" ~ "DNN-CO", 
+        DNNSelect == "d. Mulitple Types: DNN-SO" ~ "DNN-SO"
+   ), y = case_when(
+        BLUPSelect ==     "G" ~ "Genomic BLUP", 
+        BLUPSelect == "Multi" ~ "Multiple Types BLUP")
+      )+
+    theme(legend.position = ""#"bottom"
+          )
+  
+  return(plt)
+}
+
+plt_list <- list()
+for(i2 in c("G", "Multi")){
+  for(i1 in c("a. Genomic: DNN-CO", "d. Mulitple Types: DNN-CO", "d. Mulitple Types: DNN-SO")){
+    plt_list[[(1+length(plt_list))]] <- quick_plt(DNNSelect = i1, BLUPSelect= i2)
+  }
+}
+
+plt_combined_scatter <- cowplot::plot_grid(plotlist = plt_list) #, labels = c("Deep Neural Network RMSEs vs Best Linear Unbiased Predictor RMSEs"))
+
+
+wwidth = 8.5
+
+for( extention in c("svg", "pdf")){
+  ggsave(plot = plt_combined_scatter,
+       path = "../output",
+       filename = paste0(c("R_Performance_combined_scatter.", extention), collapse = ""),  
+       width = wwidth, 
+       # height = 11/2
+       height = 2*(wwidth/3),
+        
+       )
+}
+```
+
+
+
+
+#### BLUP Diagnostics
+```{r}
+# mu.dat
+# varE.dat
+# ETA_G_varU.dat
+# 
+# ETA_GxS_varU.dat
+# ETA_GxW_varU.dat
+
+get_bglr_files <- function(
+  model_dir_group = "BLUP_GSW_GxS_GxW",
+  file_name = "mu.dat",
+  value_to = "val"
+){
+  file_list <- list.files("../models/3_finalize_model_BGLR_BLUPS/")
+  # this is a safer version that won't match the interaction model for BLUP_G
+  # there shouldn't be an issue with using str_detect elsewhere 
+  file_list <- file_list[stringr::str_remove(file_list, "_Rep\\d+") == model_dir_group ]
+  file_list <- map(file_list, function(e){ 
+    temp <- read_table(paste0("../models/3_finalize_model_BGLR_BLUPS/", e, "/", file_name), col_names = F) 
+    if(! stringr::str_detect(e, "\\d+")){
+      names(temp) <- "0"
+    } else {
+      names(temp) <- stringr::str_extract(e, "\\d+$")      
+    }
+    return(temp)
+    })
+  M <- do.call(cbind, file_list)
+  M[, "Sample"] = seq(1, nrow(M))
+  M <- M %>% 
+    mutate(Sample = Sample*5) %>% # Note! I ran 10000 MCMC iterations, kept every 5
+    pivot_longer(
+      cols = names(M)[names(M) != "Sample"],
+      names_to = "Replicate",
+      values_to = value_to)
+  
+  return(M)
+}
+
+quick_plt_val <- function(M){
+  M %>% 
+  ggplot(aes(x = Sample, y = val, group = Replicate, color = Replicate))+
+  geom_path()+
+  facet_grid(Replicate~.)+
+  theme(legend.position = "")
+}
+
+get_bglr_files(
+  model_dir_group = "BLUP_G",
+  file_name = "mu.dat"
+) %>% quick_plt_val()
+
+
+get_bglr_files(
+  model_dir_group = "BLUP_G",
+  file_name = "varE.dat"
+) %>% quick_plt_val()
+
+get_bglr_files(
+  model_dir_group = "BLUP_G",
+  file_name = "ETA_G_varU.dat"
+) %>% quick_plt_val()
+```
+
+
+
+## Overtraining
+
+```{r}
+# M <- read.csv("../output/r_overtraining_across_models.csv")
+# 
+# mk_overtraining_plt <- function(M,
+#                                 Considered_Network = 'G',
+#                                 select_title = 'Genome',
+#                                 select_subtitle = "", 
+#                                 select_xlab = 'Epoch',
+#                                 select_ylab = 'RMSE'){
+#   
+# # M
+# # Considered_Network = 'S'
+# # select_title = 'Genome'
+# # select_xlab = 'Epoch'
+# # select_ylab = 'RMSE'
+#   
+# M_filter_train <- M %>% 
+#   filter(Network  == Considered_Network) %>% 
+#   filter(Set == 'Training')
+# 
+# M_filter_test  <- M %>% 
+#   filter(Network  == Considered_Network) %>% 
+#   filter(Set == 'Test')
+# 
+# ## Annotations 1
+# M_annotations <- M_filter_train %>% 
+#   group_by(epoch) %>% 
+#   mutate(mloss = mean(Loss)) %>% 
+#   mutate(msd = mean(Loss)+sd(Loss)) %>% 
+#   mutate(tot = sum(Loss))
+# 
+# 
+# epoch_val_min_mean <- distinct(M_annotations[M_annotations$mloss == min(M_annotations$mloss), 'epoch'])
+# epoch_val_min_msd  <- distinct(M_annotations[M_annotations$msd == min(M_annotations$msd), 'epoch'])
+# epoch_val_min_tot  <- distinct(M_annotations[M_annotations$tot == min(M_annotations$tot), 'epoch'])
+# 
+# ## Annotations 2
+# M_annotations <- M_filter_test %>% 
+#   group_by(epoch) %>% 
+#   mutate(Loss = mean(Loss))
+# 
+# epoch_test_min_mean <- distinct(M_annotations[M_annotations$Loss == min(M_annotations$Loss), 'epoch'])
+# 
+# ## Plots
+# plt_df <- M_filter_test %>% 
+#   group_by(epoch) %>% 
+#   mutate(AveLoss = mean(Loss)) %>% 
+#   ungroup()
+# 
+# 
+# M_filter_test %>% 
+#   select(-X, -Replicate) %>% 
+#   group_by(epoch) %>% 
+#   mutate(AveLoss = mean(Loss)) %>% 
+#   select(-Loss) %>% 
+#   ungroup() %>% 
+#   distinct()
+# 
+# 
+# 
+# plt_df_annotate <- do.call(rbind, list(
+#   mutate(distinct(plt_df[plt_df$epoch == as.numeric(epoch_val_min_mean), c("Network", "epoch", "AveLoss")]),  Type = 'Mean'),
+#   mutate(distinct(plt_df[plt_df$epoch == as.numeric(epoch_val_min_msd), c("Network", "epoch", "AveLoss")]),   Type = 'Mean + Sd.'),
+#   mutate(distinct(plt_df[plt_df$epoch == as.numeric(epoch_val_min_tot), c("Network", "epoch", "AveLoss")]),   Type = 'Sum'),
+#   mutate(distinct(plt_df[plt_df$epoch == as.numeric(epoch_test_min_mean), c("Network", "epoch", "AveLoss")]), Type = 'Best Value') )
+# )
+# 
+# 
+# 
+# # select_xbreaks = seq(10, 60, by = 10)
+# 
+# # x_nudge_1 = 0#-0.1
+# # x_nudge_2 = 0#0.1
+# 
+# color_msd = 'cornflowerblue'
+# color_sum = 'firebrick'
+# 
+# 
+# y_msd <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Mean + Sd.", "AveLoss"])
+# x_msd <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Mean + Sd.", "epoch"])
+# 
+# y_best <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Best Value", "AveLoss"])
+# x_best <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Best Value", "epoch"])
+# 
+# y_sum <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Sum", "AveLoss"])
+# x_sum <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Sum", "epoch"])
+# 
+# delta_msd <- round((y_msd - y_best)*1000)/1000
+# delta_sum <- round((y_sum - y_best)*1000)/1000
+# 
+# delta_x_msd <- mean(c(x_best, x_msd))
+# delta_x_sum <- mean(c(x_best, x_sum))
+# 
+# text_increment = 0.05
+# 
+# segment_size = 0.75
+# 
+# plt <-
+# plt_df %>% 
+#   ggplot(aes(x = epoch))+
+# 
+#   # geom_line(aes(y = AveLoss), size = 1)+#, linetype = "dotted")+
+#   
+#   # Difference between mean + sd metric and best average loss in testing set
+#   # geom_segment(aes(x =    x_msd  ,
+#   #                  y =    y_msd  ,
+#   #                  xend = x_best,
+#   #                  yend = y_msd ),
+#   #              color = color_msd, size = segment_size)+
+#   # geom_segment(aes(x =    x_best  ,
+#   #                  y =    y_msd,
+#   #                  xend = x_best,
+#   #                  yend = y_best),
+#   #            color = color_msd, size = segment_size)+
+#   # geom_segment(aes(x =    x_sum,
+#   #                  y =    y_best,
+#   #                  xend = x_sum,
+#   #                  yend = y_sum),
+#   #            color = color_sum, size = segment_size)+
+#   # geom_segment(aes(x =    x_best ,
+#   #                  y =    y_best,
+#   #                  xend = x_sum,
+#   #                  yend = y_best),
+#   #            color = color_sum, size = segment_size)+
+#   
+#   geom_hline(yintercept = y_best, linetype = "dashed")+
+#   
+#   geom_vline(xintercept = x_msd, 
+#              color = color_msd, size = segment_size)+
+#   geom_vline(xintercept = x_sum, linetype = "dashed",
+#              color = color_sum, size = segment_size)+
+#   
+#   
+#   
+#   geom_line(aes(y = AveLoss), size = 1)+#, alpha = 0.5)+
+#   
+#   # annotations
+#   # geom_text(aes(delta_x_msd, y_msd+0.02, label = delta_msd),#as.character(delta_msd)), 
+#   #                                        color = color_msd)+
+#   # geom_text(aes(delta_x_sum, y_best-0.02,label = delta_sum), #as.character(delta_sum)), 
+#   #                                        color = color_sum)+
+#   
+#   # geom_text(aes(0, 1.75,
+#   #               label = "Excess Loss:"),
+#   #               color = 'black', hjust = 0, size = 2.5)+
+#   # geom_text(aes(0, 1.75-text_increment,
+#   #               label = paste(c("Mean + Sd. ", as.character(delta_msd)), collapse = "") ),#as.character(delta_msd)),
+#   #               color = color_msd, hjust = 0, size = 2.5)+
+#   # geom_text(aes(0, 1.75-(2*text_increment),
+#   #               label = paste(c("Total Loss ", as.character(delta_sum)), collapse = "") ), #as.character(delta_sum)),
+#   #               color = color_sum, hjust = 0, size = 2.5)+
+# 
+# 
+#   # scale_x_continuous(breaks = select_xbreaks)+
+#   theme_minimal()+
+#   labs(title = select_title,
+#        subtitle = select_subtitle,
+#        x = select_xlab, 
+#        y = select_ylab)
+# 
+# 
+# print(Considered_Network)
+# print(
+#   c("MSD", "red", delta_msd, 
+#   "Sum", "blue", delta_sum)
+#   )
+# print('')
+# 
+# # plt
+# return(plt)
+# }
+# 
+# 
+# # Using an alpha completely bogs down the performance of this code. It goes from running in ~1/2 a second to 13 seconds and doesn't fully render even then! 
+# param_list <- list(
+#   c("G",    "B. Overfitting in Trained Models", 
+#                 "a. Genome", "Mean Test RMSE"),
+#   c("S",    "", "b. Soil", ""),
+#   c("W",    "", "c. Weather + Management", ""),
+#   c("cat",  "", "d. CO Interaction", "Mean Test RMSE"),
+#   c("full", "", "e. SO Interaction", "")
+#   )
+# 
+# plts <- 
+# map(param_list, function(xx){
+#   mk_overtraining_plt(
+#   M,
+#   Considered_Network = xx[1],
+#   select_title = xx[2],
+#   select_subtitle = xx[3],
+#   select_xlab = 'Epoch',
+#   select_ylab = xx[4])
+#   
+# })
+# 
+# # what's the minimum y across the plts?
+# y_min <- map(plts, function(xx){
+#   return(layer_scales(xx)$y$get_limits()[1])
+# }) %>% unlist() %>% min()
+# 
+# y_max <- 1.6
+# 
+# 
+# plt <- plts[[1]]
+# G <- plt+coord_cartesian(ylim = c(y_min, y_max) )
+# 
+# plt <- plts[[2]]
+# S <- plt+coord_cartesian(ylim = c(y_min, y_max) )
+# 
+# plt <- plts[[3]]
+# # W_upper <- plt+coord_cartesian(ylim = c(25, layer_scales(plt)$y$get_limits()[2]))
+# W_lower <- plt+coord_cartesian(ylim = c(y_min,y_max)) #coord_cartesian(ylim = c(layer_scales(plt)$y$get_limits()[1], 5))
+# 
+# plt <- plts[[4]]
+# # cat_upper <- plt+coord_cartesian(ylim = c(40, 45))
+# cat_lower  <- plt+coord_cartesian(ylim = c(y_min, y_max) )
+# 
+# plt <- plts[[5]]
+# full <- plt+coord_cartesian(ylim = c(y_min, y_max) )
+# 
+# 
+# # overfitting_plt <- G + S + W_lower + cat_lower + full + patchwork::plot_layout(nrow = 2, ncol = 3)
+# overfitting_plt <- G + S + W_lower + cat_lower + full + patchwork::plot_layout(nrow = 1, ncol = 5)
+# # overfitting_plt
+# 
+# 
+# for( extention in c("svg", "pdf")){
+#   # ggsave(plot = overfitting_plt,
+#   #      path = "../output",
+#   #      filename = paste0(c("R_overfitting.", extention), collapse = ""),  width = 8, height = 6.1)
+#   ggsave(plot = overfitting_plt,
+#        path = "../output",
+#        filename = paste0(c("R_overfitting.", extention), collapse = ""),  width = 10, height = 3)
+# }
+
+```
+
+
+```{r}
+# # Epoch Selection Underperformance Table
+# 
+# # M %>% 
+# #   group_by(Network) %>% 
+# #   group_by(Set)
+# 
+# 
+# 
+# # # mk_overtraining_plt <- function(M,
+# # #                                 Considered_Network = 'G',
+# # #                                 select_title = 'Genome',
+# # #                                 select_subtitle = "", 
+# # #                                 select_xlab = 'Epoch',
+# # #                                 select_ylab = 'RMSE'){
+# #   
+# M
+# Considered_Network = 'S'
+# 
+# M_filter_train <- M %>%
+#   filter(Network  == Considered_Network) %>%
+#   filter(Set == 'Training')
+# 
+# M_filter_test  <- M %>%
+#   filter(Network  == Considered_Network) %>%
+#   filter(Set == 'Test')
+# 
+# ## Annotations 1
+# M_annotations <- M_filter_train %>%
+#   group_by(epoch) %>%
+#   mutate(mloss = mean(Loss)) %>%
+#   mutate(msd = mean(Loss)+sd(Loss)) %>%
+#   mutate(tot = sum(Loss))
+# 
+# 
+# epoch_val_min_mean <- distinct(M_annotations[M_annotations$mloss == min(M_annotations$mloss), 'epoch'])
+# epoch_val_min_msd  <- distinct(M_annotations[M_annotations$msd == min(M_annotations$msd), 'epoch'])
+# epoch_val_min_tot  <- distinct(M_annotations[M_annotations$tot == min(M_annotations$tot), 'epoch'])
+# 
+# ## Annotations 2
+# M_annotations <- M_filter_test %>%
+#   group_by(epoch) %>%
+#   mutate(Loss = mean(Loss))
+# 
+# epoch_test_min_mean <- distinct(M_annotations[M_annotations$Loss == min(M_annotations$Loss), 'epoch'])
+# 
+# ## Plots
+# plt_df <- M_filter_test %>%
+#   group_by(epoch) %>%
+#   mutate(AveLoss = mean(Loss)) %>%
+#   ungroup()
+# 
+# 
+# M_filter_test %>%
+#   select(-X, -Replicate) %>%
+#   group_by(epoch) %>%
+#   mutate(AveLoss = mean(Loss)) %>%
+#   select(-Loss) %>%
+#   ungroup() %>%
+#   distinct()
+# 
+# 
+# 
+# plt_df_annotate <- do.call(rbind, list(
+#   mutate(distinct(plt_df[plt_df$epoch == as.numeric(epoch_val_min_mean), c("Network", "epoch", "AveLoss")]),  Type = 'Mean'),
+#   mutate(distinct(plt_df[plt_df$epoch == as.numeric(epoch_val_min_msd), c("Network", "epoch", "AveLoss")]),   Type = 'Mean + Sd.'),
+#   mutate(distinct(plt_df[plt_df$epoch == as.numeric(epoch_val_min_tot), c("Network", "epoch", "AveLoss")]),   Type = 'Sum'),
+#   mutate(distinct(plt_df[plt_df$epoch == as.numeric(epoch_test_min_mean), c("Network", "epoch", "AveLoss")]), Type = 'Best Value') )
+# )
+# 
+# plt_df_annotate
+
+```
+
+
+
+
+
+```{r}
+M <- read.csv("../output/r_overtraining_across_models.csv") %>% 
+  select(-X) %>% 
+  mutate(epoch = epoch +1) # Adjust for python/r indexing
+
+# values from `Examine Top HPS.py`
+epoch_vals <- data.frame(
+  mod = c("G", "S", "W", "cat", "full"),
+  # mean + SD (of rolling)
+  msd = c(10, 161, 225, 362, 796),
+  # total of losses
+  tls = c(12, 199, 629, 364, 711)
+)
+# don't need to change these 
+
+
+# Adjust for python/r indexing
+# epoch_vals <- epoch_vals %>% 
+  # mutate(msd = msd+1, tls = tls+1)
+
+
+mk_overtraining_plt <- function(
+  M,
+  Considered_Network = 'G',
+  select_title = 'Genome',
+  select_subtitle = "", 
+  select_xlab = 'Epoch',
+  select_ylab = 'RMSE',
+  epoch_vals = epoch_vals){
+  
+  # Considered_Network = 'G'
+  # select_title = 'Genome'
+  # select_subtitle = ""
+  # select_xlab = 'Epoch'
+  # select_ylab = 'RMSE'
+  
+  color_msd = 'cornflowerblue'
+  color_sum = 'firebrick'
+  
+  # y_msd <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Mean + Sd.", "AveLoss"])
+  # x_msd <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Mean + Sd.", "epoch"])
+  # 
+  # y_best <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Best Value", "AveLoss"])
+  # x_best <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Best Value", "epoch"])
+  # 
+  # y_sum <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Sum", "AveLoss"])
+  # x_sum <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Sum", "epoch"])
+  # 
+  # delta_msd <- round((y_msd - y_best)*1000)/1000
+  # delta_sum <- round((y_sum - y_best)*1000)/1000
+  # 
+  # delta_x_msd <- mean(c(x_best, x_msd))
+  # delta_x_sum <- mean(c(x_best, x_sum))
+  # 
+  # text_increment = 0.05
+  segment_size = 0.75
+  
+  M_temp <- M %>% 
+    filter(Set == "Test", 
+           Network == Considered_Network) %>% 
+    # mutate(epoch = epoch +1) %>% # Adjust for python/r indexing
+    group_by(epoch) %>% 
+    mutate(AveLoss = mean(Loss)) %>% 
+    arrange(epoch) 
+  
+  
+  mask <- epoch_vals$mod == Considered_Network
+  
+  x_msd <- epoch_vals[mask, "msd"]
+  x_sum <- epoch_vals[mask, "tls"]
+  y_best <- min(M_temp$AveLoss)
+  
+  plt <- M_temp %>% 
+    ggplot(aes(x = epoch))+
+    # geom_path(aes(y = Loss, group = Replicate), color = 'black', alpha = 0.1)+
+    geom_hline(yintercept = y_best, linetype = "dashed")+
+    geom_vline(xintercept = x_msd, 
+             color = color_msd, size = segment_size)+
+    geom_vline(xintercept = x_sum, linetype = "dashed",
+               color = color_sum, size = segment_size)+
+    
+    geom_path(aes(y = AveLoss), color = 'black', size = 1)+
+    # facet_wrap(.~Network, nrow = 1)+
+    theme_minimal()+
+    labs(title = select_title,
+         subtitle = select_subtitle,
+         x = select_xlab, 
+         y = select_ylab)
+  
+  return(plt) 
+  }
+
+
+param_list <- list(
+  c("G",    "B. Overfitting in Trained Models",
+                "a. Genome", "Mean Test RMSE"),
+  c("S",    "", "b. Soil", ""),
+  c("W",    "", "c. Weather + Management", ""),
+  c("cat",  "", "d. CO Interaction", "Mean Test RMSE"),
+  c("full", "", "e. SO Interaction", "")
+  )
+
+
+plts <- 
+map(param_list, function(xx){
+  mk_overtraining_plt(
+  M,
+  Considered_Network = xx[1],
+  select_title = xx[2],
+  select_subtitle = xx[3],
+  select_xlab = 'Epoch',
+  select_ylab = xx[4],
+  epoch_vals = epoch_vals)
+  
+})
+
+# what's the minimum y across the plts?
+y_min <- map(plts, function(xx){
+  return(layer_scales(xx)$y$get_limits()[1])
+}) %>% unlist() %>% min()
+
+y_max <- 1.6
+
+plt <- plts[[1]]
+G <- plt+coord_cartesian(ylim = c(y_min, y_max) )
+
+plt <- plts[[2]]
+S <- plt+coord_cartesian(ylim = c(y_min, y_max) )
+
+plt <- plts[[3]]
+
+W_lower <- plt+coord_cartesian(ylim = c(y_min,y_max)) 
+
+plt <- plts[[4]]
+
+cat_lower  <- plt+coord_cartesian(ylim = c(y_min, y_max) )
+
+plt <- plts[[5]]
+full <- plt+coord_cartesian(ylim = c(y_min, y_max) )
+
+
+
+overfitting_plt <- G + S + W_lower + cat_lower + full + patchwork::plot_layout(nrow = 1, ncol = 5)
+
+overfitting_plt
+
+
+for( extention in c("svg", "pdf")){
+  # ggsave(plot = overfitting_plt,
+  #      path = "../output",
+  #      filename = paste0(c("R_overfitting.", extention), collapse = ""),  width = 8, height = 6.1)
+  ggsave(plot = overfitting_plt,
+       path = "../output",
+       filename = paste0(c("R_overfitting.", extention), collapse = ""),  width = 10, height = 3)
+}
+```
+
+
+```{r}
+# adapted version of mk_overtraining_plt to produce "Epoch Selection Underperformance Table"
+
+M_temp <- M %>% 
+  # filter(Set == "Test", 
+  #        Network == Considered_Network) %>% 
+  group_by(Set, Network, epoch) %>% 
+  mutate(AveLoss = mean(Loss)) %>%
+  select(-Loss, -Replicate) %>% 
+  distinct() %>% 
+  arrange(epoch)
+
+out <- epoch_vals %>% 
+  rename(Network = mod,
+         EpochMeanSD = msd,
+         EpochTotLoss = tls) %>%   
+  mutate(EpochBest =NA, 
+         AveLossMeanSD = NA,
+         AveLossTotLoss = NA,
+         AveLossBest = NA
+         )
+
+for(i in c("G", "S", "W", "cat", "full")){
+  print(i)
+
+  mask <- out$Network == i
+  
+  val <- M_temp[(
+    M_temp$Network == i & 
+    M_temp$Set == "Test" & 
+    M_temp$epoch == out[mask, "EpochMeanSD"]), "AveLoss"]
+  
+  # this is to safely add in values because in the `full` (DNN-SO) 
+  # model one the mean+sd epoch number is past the trained number of epochs.
+  if(nrow(val) != 0){
+    out[mask, "AveLossMeanSD"] <- val
+  }
+  
+  val <- M_temp[(
+    M_temp$Network == i & 
+    M_temp$Set == "Test" & 
+    M_temp$epoch == out[mask, "EpochTotLoss"]), "AveLoss"]
+  
+  if(nrow(val) != 0){
+    out[mask, "AveLossTotLoss"] <- val  
+  }
+  
+  # get the epoch/value for the minimum ave loss during training
+  M_temp_losses <- M_temp[(M_temp$Network == i & 
+    M_temp$Set == "Test"), "AveLoss"]
+  
+  M_temp_subset <- M_temp[(
+    M_temp$Network == i & 
+    M_temp$Set == "Test" &
+    M_temp$AveLoss == min(M_temp_losses)), ]
+  
+  out[mask, "EpochBest"] <- M_temp_subset[, "epoch"]
+  out[mask, "AveLossBest"] <- M_temp_subset[, "AveLoss"]
+
+}
+
+out <- out %>% 
+  mutate(
+    PrAveLossMeanSD  = (AveLossMeanSD / AveLossBest),
+    PrAveLossTotLoss = (AveLossTotLoss/ AveLossBest)
+  )
+
+write.csv(out, "../output/epoch_selection_performance.csv")
+```
+
+
+
+
+
+
+```{r}
+# # adapted version of mk_overtraining_plt to produce "Epoch Selection Underperformance Table"
+# mk_overtraining_df <- function(M,
+#                                 Considered_Network = 'G'#,
+#                                 # select_title = 'Genome',
+#                                 # select_subtitle = "", 
+#                                 # select_xlab = 'Epoch',
+#                                 # select_ylab = 'RMSE'
+#                                ){
+#   
+#   # M
+#   # Considered_Network = 'S'
+#   # select_title = 'Genome'
+#   # select_xlab = 'Epoch'
+#   # select_ylab = 'RMSE'
+#     
+#   M_filter_train <- M %>% 
+#     filter(Network  == Considered_Network) %>% 
+#     filter(Set == 'Training')
+#   
+#   M_filter_test  <- M %>% 
+#     filter(Network  == Considered_Network) %>% 
+#     filter(Set == 'Test')
+#   
+#   ## Annotations 1
+#   M_annotations <- M_filter_train %>% 
+#     group_by(epoch) %>% 
+#     mutate(mloss = mean(Loss)) %>% 
+#     mutate(msd = mean(Loss)+sd(Loss)) %>% 
+#     mutate(tot = sum(Loss))
+#   
+#   
+#   epoch_val_min_mean <- distinct(M_annotations[M_annotations$mloss == min(M_annotations$mloss), 'epoch'])
+#   epoch_val_min_msd  <- distinct(M_annotations[M_annotations$msd == min(M_annotations$msd), 'epoch'])
+#   epoch_val_min_tot  <- distinct(M_annotations[M_annotations$tot == min(M_annotations$tot), 'epoch'])
+#   
+#   ## Annotations 2
+#   M_annotations <- M_filter_test %>% 
+#     group_by(epoch) %>% 
+#     mutate(Loss = mean(Loss))
+#   
+#   epoch_test_min_mean <- distinct(M_annotations[M_annotations$Loss == min(M_annotations$Loss), 'epoch'])
+#   
+#   ## Plots
+#   plt_df <- M_filter_test %>% 
+#     group_by(epoch) %>% 
+#     mutate(AveLoss = mean(Loss)) %>% 
+#     ungroup()
+#   
+#   
+#   M_filter_test %>% 
+#     select(-X, -Replicate) %>% 
+#     group_by(epoch) %>% 
+#     mutate(AveLoss = mean(Loss)) %>% 
+#     select(-Loss) %>% 
+#     ungroup() %>% 
+#     distinct()
+#   
+#   plt_df_annotate <- do.call(rbind, list(
+#     mutate(distinct(plt_df[plt_df$epoch == as.numeric(epoch_val_min_mean), c("Network", "epoch", "AveLoss")]),  Type = 'Mean'),
+#     mutate(distinct(plt_df[plt_df$epoch == as.numeric(epoch_val_min_msd), c("Network", "epoch", "AveLoss")]),   Type = 'Mean + Sd.'),
+#     mutate(distinct(plt_df[plt_df$epoch == as.numeric(epoch_val_min_tot), c("Network", "epoch", "AveLoss")]),   Type = 'Sum'),
+#     mutate(distinct(plt_df[plt_df$epoch == as.numeric(epoch_test_min_mean), c("Network", "epoch", "AveLoss")]), Type = 'Best Value') )
+#   )
+#   
+#   y_msd <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Mean + Sd.", "AveLoss"])
+#   x_msd <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Mean + Sd.", "epoch"])
+#   
+#   y_best <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Best Value", "AveLoss"])
+#   x_best <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Best Value", "epoch"])
+#   
+#   y_sum <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Sum", "AveLoss"])
+#   x_sum <- as.numeric(plt_df_annotate[plt_df_annotate$Type == "Sum", "epoch"])
+#   
+#   df <- data.frame(
+#     Considered_Network = Considered_Network,
+#     # epochs
+#     x_msd  = x_msd,
+#     x_best = x_best,
+#     x_sum  = x_sum,
+#     # corresponding ave loss
+#     y_msd  = y_msd,
+#     y_best = y_best,
+#     y_sum  = y_sum
+#   ) 
+#   
+#   return(df)
+# }
+# 
+# 
+# temp <- do.call(rbind, map(c("G", "S", "W", "cat", "full"), function(e){ mk_overtraining_df(M, Considered_Network = e) }))
+# 
+# # Warning! 
+# # Because of how we're grabbing the samve values from the plots, theres a point 
+# # that needs to be removed. MSD in SO recommended 796 wheras we only ran the 
+# # model to 711 (sum of losses). 
+# # As a result we must manually remove that value here so the table is accurate.
+# 
+# temp[temp$Considered_Network == "full", c("y_msd")] <- NA
+# 
+# 
+# temp %>% 
+#   mutate(y_msd_frac_best = y_msd/y_best,
+#          y_sum_frac_best = y_sum/y_best,
+#          y_sum_diff_msd = y_sum - y_msd # how much better is sum of losses?   
+#          )
+# 
+
+
+```
+
+
+```{r}
+# numbers are ==slightly== off.
+
+
+
+```
+
+
+
+
+## Salience Maps
+
+```{r}
+
+```
+
+### Genome
+
+```{r}
+M_cat <- read.csv("../output/r_salience_genome_catmodel.csv")
+M_sub <- read.csv("../output/r_salience_genome_submodel.csv")
+
+# Make differencce
+M_diff <- M_cat
+M_diff$Salience <- NA
+M_diff$Salience <- M_cat$Salience - M_sub$Salience
+
+
+sal_G <- M_cat %>% 
+  ggplot()+
+  geom_segment(aes(x = Factor, xend = Factor, y = Salience, yend = 0))+
+  theme_minimal()+
+  labs(x = "", y = "Salience", subtitle = "a", title = "A. Genome Saliences")
+
+
+## Histogram of saliences ======================================================
+
+flagdf <- arrange(M_cat, desc(Salience)) %>% 
+  mutate(Factor = paste0("PC\n", as.character(Factor+1)))
+flagdf <- flagdf[1:3, ]
+
+G_Sal_Hist <- M_cat %>%
+  ggplot()+
+  geom_histogram(aes(x = Salience), fill = "black")+
+  # geom_density(aes(x = Salience), fill = "black")+
+  geom_segment(data = flagdf, aes(x = Salience, y = 50, xend = Salience, yend = 10), 
+               arrow = arrow(length = unit(0.02, "npc")),
+               # lineend = c('butt'),
+               linejoin = c('mitre'),
+               size = 1
+               )+
+  geom_text(data = flagdf, aes(x = Salience, y = 50, label = Factor), hjust = 'outside', nudge_y = 20)+
+  theme_minimal()+
+  labs(x = "Salience", y = "Salience", subtitle = "A. Genome Saliences", title = "")
+G_Sal_Hist
+
+## Histogram of salience difference ============================================
+
+flagdf <- arrange(M_diff, desc(Salience)) %>% 
+  mutate(Factor = paste0("PC\n", as.character(Factor+1)))
+flagdf <- flagdf[1:3, ]
+
+flagdf$SalienceStart <- flagdf$Salience - 5*c(0, 0.001, 0.0025)*(seq_along(flagdf$Salience)-1)
+flagdf$LineStart <- seq(50, 50, length.out = 3)
+
+
+G_Sal_Diff_Hist <- M_diff %>%
+  ggplot()+
+  geom_histogram(aes(x = Salience), fill = "black")+
+  geom_segment(data = flagdf, aes(x = SalienceStart, y = LineStart, xend = Salience, yend = 10),
+               arrow = arrow(length = unit(0.02, "npc")),
+               # lineend = c('butt'),
+               linejoin = c('mitre'),
+               size = 1
+               )+
+  geom_text(data = flagdf, aes(x = SalienceStart, y = 50, label = Factor), hjust = 'outside', nudge_y = 20)+
+  theme_minimal()+
+  labs(x = "Subtracted Salience", y = "Count", subtitle = "B. Genome Salience Differences", title = "")
+G_Sal_Diff_Hist
+
+
+
+
+
+
+
+sal_G_diff <- ggplot()+
+  geom_segment(data = filter(M_diff, Salience >= 0), 
+               aes(x = Factor, xend = Factor, y = Salience, yend = 0), color = "blue")+
+  geom_segment(data = filter(M_diff, Salience <  0), 
+               aes(x = Factor, xend = Factor, y = Salience, yend = 0), color = "red")+
+  theme_minimal()+
+  labs(x = "Principal Component", y = "Subtraced Salience", subtitle = "b", title = "")
+
+
+# sal_G / sal_G_diff 
+
+```
+
+### Soil
+
+```{r}
+M_cat <- read.csv("../output/r_salience_soil_catmodel.csv")
+M_sub <- read.csv("../output/r_salience_soil_submodel.csv")
+
+# M_agg <- rbind(
+#   mutate(M_cat, Network = 'Interaction'), 
+#   mutate(M_sub, Network = 'Submodel'))
+# 
+# M_agg_min <- M_agg %>% select(-Network) %>% group_by(Factor) %>% mutate(Salience = min(Salience)) %>% distinct()
+# 
+# # sal_S <-  
+# ggplot()+
+#   geom_segment(data = M_agg, aes(x = Salience, xend = 0, y = Factor, yend = Factor, color = Network), size = 4)+
+#   geom_point(data = M_agg_min, aes(x = Salience, y = Factor), size = 4, color = 'white', shape = "|")+
+#   theme_minimal()+
+#   scale_color_manual(values = c("black", "#004785"))+
+#   # theme(legend.position = "")+
+#   labs(x = "Salience", y = "", subtitle = "", title = "Soil Saliences")
+
+
+sal_S <- cbind(
+  rename(M_cat, Interaction = Salience), 
+  select(rename(M_sub, Submodel = Salience), Submodel)
+  ) %>% 
+  mutate(bar_col = case_when(Interaction > Submodel ~ "A",
+                             Interaction < Submodel ~ "B")) %>% 
+  ggplot()+
+  geom_segment(aes(x = Interaction, xend = Submodel, y = Factor, yend = Factor, color = bar_col), size = 3)+
+  geom_point(aes(Interaction, Factor), size = 2, color = "white")+
+  geom_point(aes(Interaction, Factor), size = 2, color = "black", shape = 1)+
+  geom_point(aes(Submodel, Factor),    size = 2, color = "#004785")+
+  scale_color_manual(values = c("black", "#004785"))+
+  theme_minimal()+
+  theme(legend.position = "")+
+  labs(x = "Salience", y = "", subtitle = "C. Soil", title = "")
+
+```
+
+
+```{r}
+# (sal_G / sal_G_diff ) | sal_S
+```
+
+
+
+### Weather
+
+```{r}
+M_cat <- read.csv("../output/r_salience_weather_catmodel.csv")
+M_sub <- read.csv("../output/r_salience_weather_submodel.csv")
+
+W_factor_order <- c(
+  "N", "P", "K", 
+  "WaterTotalInmm",
+  "SoilMoistureMean", "SoilTempMean", 
+  "TempMin", "TempMean", "TempMax", 
+  "VaporPresEst", "DewPointMean", "RelativeHumidityMean", 
+  "PhotoperiodMean", "SolarRadiationMean", "UVLMean", "PARMean", 
+  "WindSpeedMax", "WindDirectionMean", "WindGustMax"
+  )
+
+# relevel if needed
+M_cat$Factor <- factor(M_cat$Factor, levels = W_factor_order)
+M_sub$Factor <- factor(M_sub$Factor, levels = W_factor_order)
+
+# Make differencce
+M_diff <- M_cat
+M_diff$Salience <- NA
+M_diff$Salience <- M_cat$Salience - M_sub$Salience
+
+
+
+## plot on top ====
+M_cat_daily <-  M_cat %>% 
+  group_by(Day) %>% 
+  mutate(Salience = mean(Salience)) %>% 
+  ungroup() 
+M_sub_daily <-  M_sub %>% 
+  group_by(Day) %>% 
+  mutate(Salience = mean(Salience)) %>% 
+  ungroup() 
+
+plt_t <- 
+full_join(
+  mutate(M_sub_daily, Network = "Submodel"),
+  mutate(M_cat_daily, Network = "Interaction")) %>% 
+  ggplot()+
+  geom_ribbon(data = M_cat_daily, aes(x = Day, xmin = Day, 
+                                      ymax = Salience, ymin = 0), fill = 'gray')+
+  geom_line(aes(x = Day, y = Salience, color = Network))+
+  theme_minimal()+
+  scale_color_manual(values = c("black", "#004785"))+
+  labs(x = "", y = "Mean Salience", subtitle = "a.", title = "C. Weather + Management Saliences")
+
+# Heatmaps ----
+
+## Best performing ====
+plt_main_cat <-
+  M_cat %>% 
+  ggplot(aes(Day, Factor, fill = Salience))+
+  geom_tile()+
+  theme_minimal()+
+  # theme(legend.position = 'top')+
+  scale_fill_gradient2(limits = c(0, 0.25),
+                       low = "white",
+                       high = "black")+
+  labs(x = "", y = "", subtitle = "A. CO Interaction Salience", )
+
+
+## Subnetwork ====
+plt_main_sub <-
+  M_sub %>% 
+  ggplot(aes(Day, Factor, fill = Salience))+
+  geom_tile()+
+  theme_minimal()+
+  # theme(legend.position = 'top')+
+  # scale_fill_distiller(type = 'seq',
+  #                      palette = "BuGn" )+
+  # scale_fill_steps2()+
+  scale_fill_gradient2(limits = c(0, 0.25),
+                       low = "white",
+                       high = "#004785")+
+  labs(x = "", y =  "", subtitle = "B. Submodel Salience")
+
+## Diff with submodel  ====
+extreme_val <- max(c(max(abs(M_cat$Salience)), 
+    c(max(M_sub$Salience))))
+
+plt_diff <- M_diff %>% 
+  ggplot(aes(Day, Factor, fill = Salience))+
+  geom_tile()+
+  theme_minimal()+
+  # theme(legend.position = 'bottom')+
+  scale_fill_gradient2(limits = c(-1*extreme_val, extreme_val), 
+                       low = "red",
+                       mid = "white",
+                       high = "blue")+
+  labs(x = "Days Post Planting", y = "", subtitle = "C. Subtracted Salience")
+
+# Marginal Plots ----
+
+
+
+
+
+## plot on right margin ====
+# this is the work around I've used to get the right order while still connecting catagorical values on the y. Reordering the factor and using path  doesn't work. For unknown reasons using `arrange` with or without `desc` doesn't seem to alter the order. Here we copy the data frame and then overwrite half the values. This prevents a summary function failing (because it's applied to a single value)
+tmp <- M_cat %>% 
+  select(Factor, Salience) %>% 
+  group_by(Factor) %>% 
+  mutate(Salience = mean(Salience)) %>% 
+  ungroup() %>% 
+  distinct() %>% 
+  mutate(Network = 'Interaction')
+
+tmp2 <- M_sub %>% 
+  select(Factor, Salience) %>% 
+  group_by(Factor) %>% 
+  mutate(Salience = mean(Salience)) %>% 
+  ungroup() %>% 
+  distinct() %>% 
+  mutate(Network = 'Submodel')
+
+
+# plt_r <- rbind(tmp, tmp2) %>% 
+#   ggplot()+
+#   geom_segment(aes(x = Salience, xend = 0, y = Factor, yend = Factor, color = Network), size = 4)+
+#   theme_minimal()+
+#   scale_color_manual(values = c("black", "#004785"))+
+#   theme(legend.position = "")+
+#   labs(x = "Mean Salience", y = "", subtitle = "")
+  
+plt_r <- cbind(
+  rename(tmp, Interaction = Salience), 
+  select(rename(tmp2, Submodel = Salience), Submodel)
+  ) %>% 
+  mutate(bar_col = case_when(Interaction > Submodel ~ "A",
+                             Interaction < Submodel ~ "B")) %>% 
+  ggplot()+
+  geom_segment(aes(x = Interaction, xend = Submodel, y = Factor, yend = Factor, color = bar_col), size = 3)+
+  geom_point(aes(Interaction, Factor), size = 2, color = "white")+
+  geom_point(aes(Interaction, Factor), size = 2, color = "black", shape = 1)+
+  geom_point(aes(Submodel, Factor),    size = 2, color = "#004785")+
+  scale_color_manual(values = c("black", "#004785"))+
+  theme_minimal()+
+  theme(legend.position = "")+
+  labs(x = "Mean Salience", y = "", subtitle = "D. Weather + Management", title = "")
+
+
+## aggregate ====
+
+# layout <- "
+# AAAAA#
+# BBBBBC
+# BBBBBC
+# DDDDDC
+# DDDDDC
+# EEEEE#
+# EEEEE#
+# "
+# 
+# weather_composite <- (
+#   plt_t + 
+#   plt_main_cat + plt_r + 
+#   plt_main_sub + 
+#   plt_diff 
+#   ) + plot_layout(design = layout)
+# 
+# weather_composite
+
+# ggsave(plot = weather_composite,
+#        path = "C:/Users/drk8b9/Documents/BitBucket/MaizeModel/reports/figures",
+#        filename = "R_W_sal.svg",  width = 16, height = 12)
+
+
+```
+
+
+```{r}
+# # original salience figure
+# layout <- "
+# AAAAAC
+# BBBBBC
+# DDDDDC
+# EEEEEF
+# EEEEEF
+# EEEEEF
+# GGGGGF
+# GGGGGF
+# GGGGGF
+# HHHHH#
+# HHHHH#
+# HHHHH#
+# "
+# 
+# salience_composite <- (
+#   sal_G + sal_G_diff + sal_S+
+#   
+#   plt_t + 
+#   plt_main_cat + plt_r + 
+#   plt_main_sub + 
+#   plt_diff 
+#   ) + plot_layout(design = layout)
+# 
+# 
+# for( extention in c("svg", "pdf")){
+#   ggsave(plot = salience_composite,
+#        path = "C:/Users/drk8b9/Documents/BitBucket/MaizeModel/reports/figures",
+#        filename = paste0(c("R_composite_sal.", extention), collapse = ""),  width = 16, height = 16)
+# }
+# 
+# 
+# salience_composite
+```
+
+```{r}
+layout <- "
+AAAAA
+BBBBB
+DDDDD
+"
+
+salience_composite <- (
+  plt_main_cat +
+  plt_main_sub +
+  plt_diff
+  ) + plot_layout(design = layout)
+salience_composite
+
+for( extention in c("svg", "pdf")){
+  ggsave(plot = salience_composite,
+       path = "../output",
+       filename = paste0(c("R_weather_sal.", extention), collapse = ""),  width = 8.5, height = 11)
+}
+
+
+
+layout <- "
+AAACCDD
+BBBCCDD
+"
+
+salience_composite <- (
+  G_Sal_Hist +
+  G_Sal_Diff_Hist +
+
+  sal_S+
+  plt_r
+  ) + plot_layout(design = layout)
+salience_composite
+
+for( extention in c("svg", "pdf")){
+  ggsave(plot = salience_composite,
+       path = "../output",
+       filename = paste0(c("R_supplemental_sal.", extention), collapse = ""), width = 11, height = 6)
+}
+```
+
+
+
+
+
+
+```{r}
+# For application
+M_cat %>% 
+  filter(Factor %in% c("WaterTotalInmm", "K", "P", "N")) %>% 
+  ggplot(aes(Day, Salience, color = Factor))+
+  geom_line(size = 1)+
+  # geom_tile()+
+  theme_bw()+
+  theme(legend.position = "bottom")+
+  ggsci::scale_color_npg()+
+  # scale_color_brewer(type = "qual", palette = "Set3")+
+  # theme(legend.position = 'top')+
+  # scale_fill_gradient2(limits = c(0, 0.25),
+  #                      low = "white",
+  #                      high = "black")+
+  labs(x = "Days Relative to Planting", y = "Salience", title = "Within Season Management Factor Importance" )
+
+
+
+
+```
+
+

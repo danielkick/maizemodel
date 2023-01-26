@@ -1,0 +1,73 @@
+# Data ------------------------------------------------------------------------
+data/SetupInstructions*
+data/external/*
+data/interim/*
+data/processed/*
+data/raw/*
+data/results_intermediates/*
+*.csv
+*.xlsx
+
+## data for R
+models/3_finalize_lm/data_intermediates/*.feather
+
+# Fitted models, histories, objects -------------------------------------------
+*.h5
+*history.json
+models/*/kt/*
+
+## seed files
+random_cv_starting_seed.json
+
+## hyperparameter files
+hps_rank_*.json
+
+hps_*_*.json
+
+Best_hps_*_*.json
+Best_hps_*_*_rep.json # included only for clarity. Above line with catch these.
+ 
+## prediction files
+hps_rep_*_predictions.json
+
+## from BGLR
+*.dat
+
+## from R
+*.rds
+*_formula.txt
+
+## Pickled objects
+*.pkl
+*.p
+
+# Byproducts & Output files ---------------------------------------------------
+# text notebooks are tracked (jupytext is used for conversion)
+*.ipynb 
+.ipynb_checkpoints/
+*.html
+.Rhistory
+slurm-*
+lambda_log.txt
+*.log
+nohup.out
+*.swp
+
+
+# Visualizations --------------------------------------------------------------
+notebooks/iframe_figures/*
+*.svg
+*.pdf
+
+
+# Zipped files ----------------------------------------------------------------
+*.tar.gz
+*.7z
+
+# Misc Files ------------------------------------------------------------------
+Changes.txt
+ChangesPathsInFiles.txt
+models/start_tf2py3_instance.sh
+
+# Library (Deprecated) --------------------------------------------------------
+library/*

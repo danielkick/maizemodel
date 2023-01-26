@@ -1,0 +1,18 @@
+#!/bin/bash 
+
+# job standard output will go to the file slurm-%j.out (where %j is the job ID)
+
+#SBATCH -A scinet
+#SBATCH --mail-user=$daniel.kick@usda.gov  
+#SBATCH --mail-type=ALL
+#SBATCH --time=290:00:00   # walltime limit (HH:MM:SS)
+#SBATCH --nodes=1   # number of nodes
+#SBATCH --ntasks-per-node=40   # 20 processor core(s) per node X 2 threads per core
+#SBATCH --job-name='G'
+#SBATCH --partition=gpu    # standard node(s)
+
+# LOAD MODULES, INSERT CODE, AND RUN YOUR PROGRAMS HERE
+module load singularity
+singularity instance start ../../../tensorflow/tensorflow-21.07-tf2-py3.sif tf2py3
+cd "$PWD"
+singularity exec instance://tf2py3 python model.py

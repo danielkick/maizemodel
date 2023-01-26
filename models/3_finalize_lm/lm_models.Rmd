@@ -1,0 +1,367 @@
+---
+title: "Untitled"
+output: html_document
+date: '2022-04-05'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r inst libraries}
+if(TRUE == FALSE){
+  # explicitly update existing libraries
+  # install.packages("vctrs")
+  # install.packages("rprojroot")
+  # install.packages("magrittr")
+  
+  
+  install.packages("arrow")
+  #Install lme4 package
+  # install.packages("lme4")
+  install.packages("tictoc")
+}
+```
+
+```{r}
+# setwd("C:/Users/drk8b9/Documents/BitBucket/maize_model/")
+```
+
+
+```{r load libraries}
+library(arrow)
+library(magrittr)
+library(tidyr)
+library(dplyr)
+# library(lme4)
+library(tictoc)
+library(here) # start in root of project 
+
+```
+
+
+
+## Data Prep
+```{r data}
+base_path <- here("models", "3_finalize_lm", "data_intermediates")
+train_path_c <- here(base_path, "training_data.csv") 
+train_path_f <- here(base_path, "training_data.feather") 
+test_path_c  <- here(base_path, "testing_data.csv") 
+test_path_f  <- here(base_path, "testing_data.feather") 
+
+if( ! file.exists(train_path_f) ){
+  train <- read.csv(train_path_c)
+  arrow::write_feather(train, train_path_f)  
+} else {
+  train <- arrow::read_feather(train_path_f)
+}
+
+if( ! file.exists(test_path_f) ){
+  test <- read.csv(test_path_c)
+  arrow::write_feather(test, test_path_f)  
+} else {
+  test <- arrow::read_feather(test_path_f)
+}
+```
+
+
+```{r data column groupings}
+# make a "simple" additive model with all the pcs
+pc_names <- names(train)[stringr::str_starts(names(train), "PC")]
+pc_formula_str <- paste(list('~ ', paste(pc_names, collapse = ' + ')), collapse = "" )
+
+s_names <- c("SoilpH", "WDRFpH", "SSalts", "PercentOrganic", "ppmNitrateN", "NitrogenPerAcre", "ppmK", "ppmSulfateS", "ppmCa", "ppmMg", "ppmNa", "CationExchangeCapacity", "PercentH", "PercentK", "PercentCa", "PercentMg", "PercentNa", "ppmP", "PercentSand", "PercentSilt", "PercentClay")
+
+wclust_names <- c("N", "P", "K", "TempMin", "TempMean", "TempMax", "DewPointMean", "RelativeHumidityMean", "SolarRadiationMean", "WindSpeedMax", "WindDirectionMean", "WindGustMax", "SoilTempMean", "SoilMoistureMean", "UVLMean", "PARMean", "PhotoperiodMean", "VaporPresEst", "WaterTotalInmm")
+
+
+  # list(~SoilpH + WDRFpH + SSalts + PercentOrganic + ppmNitrateN + NitrogenPerAcre + ppmK + ppmSulfateS + ppmCa + ppmMg + ppmNa + CationExchangeCapacity + PercentH + PercentK + PercentCa + PercentMg + PercentNa + ppmP + PercentSand + PercentSilt + PercentClay + factor(N) + factor(P) + factor(K) + factor(TempMin) + factor(TempMean) + factor(TempMax) + factor(DewPointMean) + factor(RelativeHumidityMean) + factor(SolarRadiationMean) + factor(WindSpeedMax) + factor(WindDirectionMean) + factor(WindGustMax) + factor(SoilTempMean) + factor(SoilMoistureMean) + factor(UVLMean) + factor(PARMean) + factor(PhotoperiodMean) + factor(VaporPresEst) + factor(WaterTotalInmm), data = M, model = "FIXED"),
+
+```
+
+```{r}
+ # Let's start by making G as small as we can. 
+# train["Split"] <- "Train"
+# test["Split"] <- "Test"
+# M <- rbind(train, test)
+# Downsample to make everything run faster
+```
+
+## Selecting weather clusters to use:
+If we use the maximum average(daily_salience):
+```{r}
+# We're selecting models based on salience in the concatenated model. We're not about to try out all of these. 
+
+# run in 99_AcrossMethodErrorVis.ipynb
+# pd.DataFrame({"xbar" : np.max(np.mean(cat_map, axis = 0), axis = 0),
+#              'name':[e for e in list(weather) if e not in ['Unnamed: 0', 'ExperimentCode', 'Year', 'Date']]}
+#             ).sort_values("xbar", ascending = False)
+
+# -- max -- 
+# xbar	    name               | 
+#------------------------------|
+# 0.244909	WaterTotalInmm     |111
+# 0.198322	SolarRadiationMean |222
+# 0.175365	TempMax            |333
+# 0.174127	WindDirectionMean  |444
+# 0.173293	VaporPresEst       |555
+# 0.139329	UVLMean            |6--
+#           PARMean            |866
+# -- mean -- 
+# xbar	name
+# 0.090117	WaterTotalInmm
+# 0.070422	SolarRadiationMean
+# 0.064650	TempMax
+# 0.063362	WindDirectionMean
+# 0.049789	VaporPresEst
+# 0.048847	PARMean
+# -- median -- 
+# xbar	name
+# 0.088161	WaterTotalInmm
+# 0.069861	SolarRadiationMean
+# 0.064294	TempMax
+# 0.063595	WindDirectionMean
+# 0.049727	VaporPresEst
+# 0.048597	PARMean
+
+
+```
+
+## Run Models
+Function for writing out results
+```{r}
+save_out_model_info <- function(
+  mod_name = "predictions",
+  fm = fm,
+  mod_str = mod_str,
+  save_path = "./"
+    ){
+  # 1. Model (most important)
+  save_file = paste0(save_path, "/", mod_name,".rds")
+  saveRDS(fm, save_file)
+  # 2. Formula String (least important, fastest)
+  sink(paste0(save_path, "/", mod_name, "_formula", ".txt"))
+  cat(mod_str)
+  sink()
+  # 3. Predictions/retrodictions
+  y_train    <- train$Yield
+  yHat_train <- predict(fm, train)
+  y_test     <- test$Yield
+  yHat_test  <- predict(fm, test, allow.new.levels = TRUE)
+  
+  predictions <- rbind(
+    data.frame(y = train$Yield,
+               yHat = yHat_train,
+               type = rep("Train", times = length(yHat_train))),
+    data.frame(y = test$Yield,
+               yHat = yHat_test,
+               type = rep("Test", times = length(yHat_test)))
+        )
+  write_csv_arrow(x = as.data.frame(predictions), 
+                  paste0(save_path, "/", mod_name, "_predictions", ".csv"))  
+}
+```
+
+
+
+```{r}
+# Models we want:
+pc_select = paste(paste0("PC", 1:8))
+
+
+wclust_names_select <- c("WaterTotalInmm", "SolarRadiationMean", "TempMax", "WindDirectionMean", "VaporPresEst")
+
+s_names
+wclust_names
+
+res_dir = here("models", "3_finalize_lm", "results")
+```
+
+
+
+
+```{r}
+# warning: this helper function that references several global objects (datasets)
+run_and_write_model <- function(
+  mod_name = "predictions",
+  mod_str = mod_str,
+  save_path = "./"
+    ){
+  # 0. Fit Model
+  tic <- Sys.time(); print(tic)
+  fm <- lm(as.formula(mod_str), data = train)
+  toc <- Sys.time(); print(toc)
+  
+  
+  # 1. Model (most important)
+  save_file = paste0(save_path, "/", mod_name,".rds")
+  saveRDS(fm, save_file)
+  # 2. Formula String (least important, fastest)
+  sink(paste0(save_path, "/", mod_name, "_formula", ".txt"))
+  cat(mod_str)
+  sink()
+  # 3. Predictions/retrodictions
+  y_train    <- train$Yield
+  yHat_train <- predict(fm, train)
+  y_test     <- test$Yield
+  yHat_test  <- predict(fm, test, allow.new.levels = TRUE)
+  
+  predictions <- rbind(
+    data.frame(y = train$Yield,
+               yHat = yHat_train,
+               type = rep("Train", times = length(yHat_train))),
+    data.frame(y = test$Yield,
+               yHat = yHat_test,
+               type = rep("Test", times = length(yHat_test)))
+        )
+  write_csv_arrow(x = as.data.frame(predictions), 
+                  paste0(save_path, "/", mod_name, "_predictions", ".csv"))
+  
+  # 4. Write out fitting times
+  write.csv(x = data.frame(
+  Start = tic,	
+  End = toc,
+  Duration = toc-tic
+), file = paste0(save_path, "/", mod_name, "_RunTime", ".csv")
+)
+  
+}
+
+# run_and_write_model(
+#   mod_name = "predictions",
+#   mod_str = "Yield ~ WaterTotalInmm + SolarRadiationMean",
+#   train_data = train,
+#   save_path = "./results_2"
+#     )
+```
+
+
+```{r}
+# function to save out linear model replicates in directories similar to how the BLUPs are organized.
+run_and_write_model_reps <- function(mod_group = "lm_S",
+                                     mod_str = paste(c("Yield ~ ", paste(s_names, collapse = " + ")), 
+                                                     collapse = "" ),
+                                     n_reps = 10   
+                                     ){
+  for(i in seq(0, (n_reps - 1) )){
+    dir_name = ifelse(i == 0, mod_group, paste0(mod_group,"_Rep",as.character(i)))
+    
+    # check if the subdirectory for this replicate exists, make it if it doesn't
+    ifelse(!dir.exists(file.path(res_dir, dir_name)), dir.create(file.path(res_dir, dir_name)), FALSE)
+  
+    run_and_write_model(
+        mod_name = "fm",
+        mod_str = mod_str,
+        save_path = paste0(res_dir, "/", dir_name)
+        )  
+  }
+}
+```
+
+
+```{r eval=FALSE}
+# All G
+run_and_write_model_reps(
+  mod_group = "lm_G",
+  mod_str = paste(c("Yield ~ ", paste(paste0("PC", 1:1725), collapse = " + ")), 
+                  collapse = "" ),
+  n_reps = 10   
+  )
+
+# Warning messages:
+# 1: In predict.lm(fm, train) :
+#   prediction from a rank-deficient fit may be misleading
+# 2: In predict.lm(fm, test, allow.new.levels = TRUE) :
+#   prediction from a rank-deficient fit may be misleading
+```
+
+
+```{r eval=FALSE}
+run_and_write_model_reps(
+  mod_group = "lm_S",
+  mod_str = paste(c("Yield ~ ", paste(s_names, collapse = " + ")), 
+                  collapse = "" ),
+  n_reps = 10   
+  )
+
+```
+
+```{r eval=FALSE}
+# All W
+run_and_write_model_reps(
+  mod_group = "lm_W",
+  mod_str = paste(c("Yield ~ ", paste(wclust_names, collapse = " + ")), 
+                  collapse = "" ),
+  n_reps = 10   
+  )
+
+```
+
+
+```{r eval=FALSE}
+# All Additive and interactions
+
+# interaction_terms <- purrr::map(paste0("PC", 1:1725), function(PC){
+# 
+#     paste(
+#     paste(paste0(PC, ":", s_names), collapse = " + "), 
+#     "+",
+#     paste(paste0(PC, ":", wclust_names), collapse = " + ")
+#   )
+# })
+# 
+# interaction_terms <- unlist(interaction_terms)
+# interaction_terms <- paste(interaction_terms, collapse = " + ")
+# 
+# 
+# run_and_write_model(
+#   mod_name = "gswx.f",
+#   mod_str = paste(c("Yield ~ ", 
+#                     paste(paste0("PC", 1:1725), collapse = " + "), "+",
+#                     paste(s_names, collapse = " + "), "+",
+#                     paste(wclust_names, collapse = " + "), "+",
+#                     interaction_terms),
+#                   collapse = "" ),
+#   save_path = res_dir
+#     )
+
+
+ # Error: protect(): protection stack overflow 
+```
+
+
+```{r eval=FALSE}
+# All Additive and FEW interactions
+
+interaction_terms <- purrr::map(paste0("PC", 1:8), function(PC){
+
+    paste(
+    paste(paste0(PC, ":", s_names), collapse = " + "), 
+    "+",
+    paste(paste0(PC, ":", wclust_names), collapse = " + ")
+  )
+})
+
+interaction_terms <- unlist(interaction_terms)
+interaction_terms <- paste(interaction_terms, collapse = " + ")
+
+
+
+run_and_write_model_reps(
+  mod_group = "lm_GSW_GxS_GxW",
+  mod_str = paste(c("Yield ~ ", 
+                    paste(paste0("PC", 1:1725), collapse = " + "), "+",
+                    paste(s_names, collapse = " + "), "+",
+                    paste(wclust_names, collapse = " + "), "+",
+                    interaction_terms
+                    ), 
+                  collapse = "" ),
+  n_reps = 10   
+  )
+# Warning messages:
+# 1: In predict.lm(fm, train) :
+#   prediction from a rank-deficient fit may be misleading
+# 2: In predict.lm(fm, test, allow.new.levels = TRUE) :
+#   prediction from a rank-deficient fit may be misleading
+```
