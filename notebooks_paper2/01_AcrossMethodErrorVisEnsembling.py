@@ -882,48 +882,9 @@ summary_df.loc[summary_df['key0'] == 'WOneHot', 'key0'] = 'W'
 # %%
 summary_df.head()
 
+
 # %% [markdown]
-# ## Visualization
-
-# %%
-# mask = ((summary_df['key1'] == 'dnn') & (summary_df['key0'] == 'cat'))
-# summary_df.loc[mask, ['key0', 'key1'] ] = ['All', 'dnn\'']
-
-# summary_df = summary_df.loc[summary_df['key0'] != 'cat']
-
-# %%
-# px.scatter(summary_df, 
-#            x = 'key1', y = 'test_rmse', facet_col='key0', 
-#            color = 'key1', 
-#            template = 'plotly_white')
-
-
-# %%
-# px.scatter(summary_df, 
-#            x = 'key1', y = 'test_r2', facet_col='key0', 
-#            color = 'key1', 
-#            template = 'plotly_white')
-
-# %%
-# fig = px.box(summary_df, 
-#            x = 'key1', y = 'test_rmse', facet_col='key0', 
-#            color = 'key1', 
-#            template = 'plotly_white')
-
-# # fig.write_html('RMSE_compare.html')
-
-# fig
-
-
-# %%
-# fig = px.box(summary_df, 
-#            x = 'key1', y = 'test_r2', facet_col='key0', 
-#            color = 'key1', 
-#            template = 'plotly_white')
-
-# # fig.write_html('RMSE_compare.html')
-
-# fig
+# # Visualization
 
 # %% [markdown]
 # ## How does aggregation change the predictive accuracy?
@@ -1030,15 +991,15 @@ mod_test_y = get_mod_multi_yyhat(
     split = 'test').loc[:, ['y']]
 
 # %%
-# # Fill in missings with 0
+# Fill in missings with 0
 
-# for e in list(mod_train_yhats):
-#     mask = mod_train_yhats[e].isna()
-#     mod_train_yhats.loc[mask, e] = 0
+for e in list(mod_train_yhats):
+    mask = mod_train_yhats[e].isna()
+    mod_train_yhats.loc[mask, e] = 0
 
-# for e in list(mod_test_yhats):
-#     mask = mod_test_yhats[e].isna()
-#     mod_test_yhats.loc[mask, e] = 0
+for e in list(mod_test_yhats):
+    mask = mod_test_yhats[e].isna()
+    mod_test_yhats.loc[mask, e] = 0
 
 
 # %%
@@ -1177,8 +1138,6 @@ rmse_matrix = rmse_matrix.sort_values('MeanRMSE')
 # %%
 px.box(rmse_matrix, x = 'pairing', y = 'RMSE')
 
-
-
 # %%
 
 rmse_matrix.mod1
@@ -1190,81 +1149,26 @@ pd.DataFrame(mod_comb_list_test)
 
 # %%
 
-# %%
-
-# %% code_folding=[]
-
-# %%
-
-# %%
+# %% [markdown]
+# ## What performance would be reasonable?
+# If I use the training data to create ensemble weights, how would these ensembles do?
+#
 
 # %%
 
-
-def get_best_dnn_blup_yhats(rep_n = '0'):
-    temp = pd.DataFrame()
-    temp['y_test'] = tf_res['cat'][rep_n]['y_test']
-    temp['DNNCO_yHat_test'] = [e[0] for e in tf_res['cat'][rep_n]['yHat_test']]
-
-    temp2 = pd.DataFrame()
-    temp2['y_test'] = bglr_res['Multi']['BLUP']['rep'+rep_n]['y_test']
-    temp2['BLUP_yHat_test'] = bglr_res['Multi']['BLUP']['rep'+rep_n]['yHat_test']
-
-    out = temp.merge(temp2)
-    
-    out['MEAN_yHat_test'] = (out['DNNCO_yHat_test'] + out['BLUP_yHat_test'])/2
-    return(out)
-
-def get_rmse(observed, predicted):
-    MSE = mean_squared_error(observed, predicted)
-    RMSE = math.sqrt(MSE)
-    return(RMSE)
-
-ens_df_test = get_best_dnn_blup_yhats(rep_n = '0')
-ens_df_test.head()
-
 # %%
-ens_df_list = [get_best_dnn_blup_yhats(rep_n = str(i)) for i in range(10)]
 
-for i in range(len(ens_df_list)):
-    ens_df_list[i].loc[:, 'Rep'] = i
-
-
-# %%
-ens_df = pd.concat(ens_df_list)
-
-ens_df
+# %% [markdown]
+# ### Ensembling Performance
 
 # %%
 
 # %%
 
 # %%
-ens_df_summary = pd.concat([
-    pd.DataFrame([
-        get_rmse(observed = ens_df['y_test'], predicted = ens_df[COL]
-                ) for COL in ['DNNCO_yHat_test', 'BLUP_yHat_test', 'MEAN_yHat_test']
-    ], index = [0, 1, 2]).T for ens_df in ens_df_list])
 
-ens_df_summary = ens_df_summary.rename(
-    columns = {0:'DNNCO_yHat_test', 
-               1:'BLUP_yHat_test', 
-               2:'MEAN_yHat_test'})
-
-ens_df_summary = ens_df_summary.reset_index().drop(columns = 'index').reset_index().rename(columns = {'index':'Replicate'})
-ens_df_summary
-
-# %%
-temp = ens_df_summary.melt(id_vars = ['Replicate'], value_vars=['DNNCO_yHat_test', 'BLUP_yHat_test', 'MEAN_yHat_test'])
-temp = temp.rename(columns = {'variable': 'Prediction', 'value': 'RMSE'})
-
-
-
-# %%
-px.line(temp, x = 'Prediction', y = 'RMSE', color = 'Replicate')
-
-# %%
-px.box(temp, x = 'Prediction', y = 'RMSE')
+# %% [markdown]
+# ### Model Stacking
 
 # %%
 
@@ -1273,17 +1177,20 @@ px.box(temp, x = 'Prediction', y = 'RMSE')
 # %%
 
 # %%
-px.scatter(ens_df_test, x = 'y_test', y = 'DNNCO_yHat_test')
-
-# %%
-ens_df_test
 
 # %%
 
 # %%
 
 # %%
-summary_df.loc[:, ['source', 'key0', 'key1']].drop_duplicates()
+
+# %%
+
+# %%
+
+# %%
+
+# %%
 
 # %%
 
