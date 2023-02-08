@@ -6,7 +6,7 @@
 #       extension: .py
 #       format_name: percent
 #       format_version: '1.3'
-#       jupytext_version: 1.11.2
+#       jupytext_version: 1.14.4
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -1080,7 +1080,7 @@ from sklearn.metrics import r2_score
 
 # %%
 
-# %% code_folding=[35, 45, 111]
+# %% code_folding=[35, 111]
 # temp = ml_res['All']['knn']
 
 ## Create Empty Summary DataFrame ==============================================
@@ -1936,6 +1936,105 @@ summary_df.head()
 # # fig.write_html('RMSE_compare.html')
 
 # fig
+
+# %% [markdown]
+# ## How does aggregation change the predictive accuracy?
+
+# %%
+
+# %% code_folding=[35, 45]
+
+# %%
+
+
+def get_best_dnn_blup_yhats(rep_n = '0'):
+    temp = pd.DataFrame()
+    temp['y_test'] = tf_res['cat'][rep_n]['y_test']
+    temp['DNNCO_yHat_test'] = [e[0] for e in tf_res['cat'][rep_n]['yHat_test']]
+
+    temp2 = pd.DataFrame()
+    temp2['y_test'] = bglr_res['Multi']['BLUP']['rep'+rep_n]['y_test']
+    temp2['BLUP_yHat_test'] = bglr_res['Multi']['BLUP']['rep'+rep_n]['yHat_test']
+
+    out = temp.merge(temp2)
+    
+    out['MEAN_yHat_test'] = (out['DNNCO_yHat_test'] + out['BLUP_yHat_test'])/2
+    return(out)
+
+def get_rmse(observed, predicted):
+    MSE = mean_squared_error(observed, predicted)
+    RMSE = math.sqrt(MSE)
+    return(RMSE)
+
+ens_df_test = get_best_dnn_blup_yhats(rep_n = '0')
+ens_df_test.head()
+
+# %%
+ens_df_list = [get_best_dnn_blup_yhats(rep_n = str(i)) for i in range(10)]
+
+for i in range(len(ens_df_list)):
+    ens_df_list[i].loc[:, 'Rep'] = i
+
+
+# %%
+ens_df = pd.concat(ens_df_list)
+
+ens_df
+
+# %%
+
+# %%
+ens_df_summary
+
+# %%
+ens_df_summary = pd.concat([
+    pd.DataFrame([
+        get_rmse(observed = ens_df['y_test'], predicted = ens_df[COL]
+                ) for COL in ['DNNCO_yHat_test', 'BLUP_yHat_test', 'MEAN_yHat_test']
+    ], index = [0, 1, 2]).T for ens_df in ens_df_list])
+
+ens_df_summary = ens_df_summary.rename(
+    columns = {0:'DNNCO_yHat_test', 
+               1:'BLUP_yHat_test', 
+               2:'MEAN_yHat_test'})
+
+ens_df_summary = ens_df_summary.reset_index().drop(columns = 'index').reset_index().rename(columns = {'index':'Replicate'})
+ens_df_summary
+
+# %%
+temp = ens_df_summary.melt(id_vars = ['Replicate'], value_vars=['DNNCO_yHat_test', 'BLUP_yHat_test', 'MEAN_yHat_test'])
+temp = temp.rename(columns = {'variable': 'Prediction', 'value': 'RMSE'})
+
+
+
+# %%
+px.line(temp, x = 'Prediction', y = 'RMSE', color = 'Replicate')
+
+# %%
+px.box(temp, x = 'Prediction', y = 'RMSE')
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+px.scatter(ens_df_test, x = 'y_test', y = 'DNNCO_yHat_test')
+
+# %%
+ens_df_test
+
+# %%
+
+# %%
+
+# %%
+summary_df.loc[:, ['source', 'key0', 'key1']].drop_duplicates()
+
+# %%
+
+# %%
 
 # %% [markdown]
 # ## Look for Evidence of Over Training
@@ -2811,8 +2910,6 @@ px.box(p_copy, x = "F", y = "abs_errors")
 # %%
 px.box(p_copy, x = "M", y = "abs_errors")
 
-
-# %%
 
 # %% [markdown]
 # # What are the salient features of the datasets?
