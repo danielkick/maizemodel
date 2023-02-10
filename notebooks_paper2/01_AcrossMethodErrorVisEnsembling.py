@@ -33,6 +33,7 @@ import math
 import scipy.stats as stats        
 from scipy import stats # for qq plot
 from sklearn.metrics import mean_squared_error
+from sklearn.metrics import r2_score
 from sklearn.decomposition import PCA
 
 import tensorflow as tf
@@ -41,6 +42,9 @@ from tensorflow.keras import layers
 import tf_keras_vis
 from tf_keras_vis.saliency import Saliency
 from tf_keras_vis.utils import normalize
+
+# for simple MLP for ensembling
+from sklearn.neural_network import MLPRegressor
 
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -65,8 +69,7 @@ pio.renderers.default = [
 #     'colab',
 #     'jupyterlab'
 ][0]
-
-
+pio.templates.default = "plotly_white"
 
 # %%
 "../data/atlas/models/3_finalize_model_syr__rep_G/"
@@ -81,7 +84,7 @@ pio.renderers.default = [
 # %% [markdown]
 # ## Preparation
 
-# %% code_folding=[2, 54, 123]
+# %% code_folding=[1, 50, 116]
 # classes to hold model results
 class ml_results:
     """
@@ -386,9 +389,6 @@ class bglr_results(ml_results):
             elif results_key_lvl_2 not in self.results[results_key_lvl_0][results_key_lvl_1].keys():
                 self.results[results_key_lvl_0][results_key_lvl_1][results_key_lvl_2] = res_dict
 
-
-
-
 # %% [markdown]
 # | . |rep |  train_rmse   | train_r2      | test_rmse    | test_r2       |
 # |---|----|---------------|---------------|--------------|---------------|
@@ -411,47 +411,17 @@ class bglr_results(ml_results):
 # | CO| 9  |  1.110223e-16 |  0            | 0            |  0            |
 
 # %%
-
-# %%
 bglr_res = bglr_results(project_folder="../models/3_finalize_model_BGLR_BLUPS")
 bglr_res.retrieve_results()
 bglr_res = bglr_res.results
 
 
-# %%
-# bglr_res.keys()
-# bglr_res['Multi']['BLUP'].keys()
-
-# %%
-# ml_res['All']['knn'].keys()
-
-# %%
-# def _temp(irep = 0):
-#     with open( "../data/atlas/models/3_finalize_classic_ml_10x/hps_res_All/Best_hps_rf_4All_rep"+str(irep)+".json", 'r') as f:
-#         dat = json.load(f)    
-
-#     return(pd.DataFrame({str(irep): dat['y_train']}))
-
-# rf_temp = pd.concat([_temp(irep = i) for i in range(10)], axis = 1)
-# rf_temp
-
-# %%
-
 # %% code_folding=[]
-# print(ml_results.__doc__)
-# ml_res = ml_results(project_folder = "../data/atlas/models/3_finalize_classic_ml/")
 ml_res = ml_results(project_folder = "../models/3_finalize_classic_ml_10x/")
 ml_res.retrieve_results()
 ml_res = ml_res.results
-            
-# ml_res.results['All']['rf'].keys()
-# dict_keys(['rep6', 'rep2', 'rep8', 'rep7', 'rep1', 'rep3', 'rep0', '4All', 'rep9', 'rep5', 'rep4'])
 
 # %%
-# ml_res
-
-# %% code_folding=[]
-# print(tf_results.__doc__)
 tf_res = {}
 
 for proj in ["3_finalize_model_syr__rep_G", 
@@ -469,21 +439,11 @@ for proj in ["3_finalize_model_syr__rep_G",
     else:
         tf_res.update(temp)
 
-
-# %%
+# %% code_folding=[]
 lmlike_res = lmlike_results(project_folder="../models/3_finalize_lm/")
 lmlike_res.retrieve_results()
 lmlike_res = lmlike_res.results
 
-# %%
-
-# %%
-# tf_res
-
-# %%
-from sklearn.metrics import r2_score
-
-# %%
 
 # %% code_folding=[35, 45, 111]
 # temp = ml_res['All']['knn']
@@ -633,16 +593,6 @@ for i in summary_df.index:
 
 
 # %%
-
-
-# %%
-# summary_df
-
-
-# %%
-# summary_df.loc[(summary_df.source == "lmlike_res"), ]
-
-# %%
 ## Add in a Naieve estimate -- Guessing the Training Mean Every Time ===========
 ys = tf_res['G']['0']['y_train']
 yNaive = [0 for e in range(len(ys))]
@@ -705,11 +655,6 @@ temp = temp.rename(columns ={
 summary_df = pd.concat([summary_df, temp])    
 
 # %%
-summary_df.loc[:, ['key0', 'key1']].drop_duplicates()
-
-# %%
-
-# %%
 summary_df['model_class'] = ''
 summary_df['data_source'] = ''
 summary_df['model'] = ''
@@ -766,10 +711,6 @@ summary_df.loc[mask, 'replicate']  = summary_df.loc[mask, 'key2'].str.replace('r
 summary_df.loc[summary_df.replicate.isna(), 'replicate'] = 0 
 
 # %%
-
-# %%
-
-# %%
 # parse lmlikes
 summary_df['annotation'] = ''
 # mask = summary_df.model_class == 'LM'
@@ -810,50 +751,28 @@ for i in range(lmlike_additional_info.shape[0]):
     summary_df.loc[mask, 'annotation'] = lmlike_additional_info.loc[i, 'annotation']
 
 
-# %%
-
-
-# %%
-
-# %%
-# summary_df
-
-# %%
-
-# %%
-
-# %%
-
-# %%
-tmp = summary_df
-tmp.head()
-
-# %%
-tmp2 = tmp
-
-tmp2.loc[tmp2.model == 'rnr', 'model'] =  "Radius NR"
-tmp2.loc[tmp2.model == 'knn', 'model'] =  "KNN"
-tmp2.loc[tmp2.model == 'rf', 'model'] =  "Rand.Forest"
-tmp2.loc[tmp2.model == 'svrl', 'model'] =  "SVR (linear)"
-
-tmp2.loc[tmp2.model == 'lm', 'model'] =  "LM"
-
-tmp2.loc[tmp2.annotation == 'Intercept Only', 'model'] =  "Training Mean"
-
-# %%
-# tmp2.loc[tmp2.model == 'LM', ]
-
-
-# %%
-# tmp2.to_clipboard()
-
 # %% [markdown]
 # ### For final figs
 
 # %%
-# tmp2.to_csv("../output/r_performance_across_models.csv")
+# tmp = summary_df
+# tmp.head()
 
 # %%
+# tmp2 = tmp
+
+# tmp2.loc[tmp2.model == 'rnr', 'model'] =  "Radius NR"
+# tmp2.loc[tmp2.model == 'knn', 'model'] =  "KNN"
+# tmp2.loc[tmp2.model == 'rf', 'model'] =  "Rand.Forest"
+# tmp2.loc[tmp2.model == 'svrl', 'model'] =  "SVR (linear)"
+
+# tmp2.loc[tmp2.model == 'lm', 'model'] =  "LM"
+
+# tmp2.loc[tmp2.annotation == 'Intercept Only', 'model'] =  "Training Mean"
+
+# %%
+# tmp2.to_csv("../output/r_performance_across_models.csv")
+
 
 # %%
 ## Edit the keys so there are consistent groupings =============================
@@ -872,15 +791,195 @@ summary_df = summary_df.drop(columns = ['key2', 'extracted_rep_num'])
 summary_df.loc[summary_df['key0'] == 'WOneHot', 'key0'] = 'W'
 
 # %%
-
-# %%
-
-# %%
-
-# %% code_folding=[]
-
-# %%
 summary_df.head()
+
+# %% [markdown]
+# # Load data
+
+# %% [markdown]
+# ## Set up data -- used in salinence, pulling observations
+
+# %%
+phenotype = pd.read_csv('../data/processed/tensor_ref_phenotype.csv')
+soil = pd.read_csv('../data/processed/tensor_ref_soil.csv')
+weather = pd.read_csv('../data/processed/tensor_ref_weather.csv')
+
+# %%
+# Specified Options -----------------------------------------------------------
+## General ====
+projectName = 'kt' # this is the name of the folder which will be made to hold the tuner's progress.
+# hp = kt.HyperParameters()
+## Tuning ====
+splitIndex = 0
+maxTrials  = 40  
+numEpochs  = 1000 
+# kfolds     = 10 
+cvSeed     = 646843
+max_pseudorep = 10 # <-- New. How many times should the model be run to account for random initialization? 
+## Model ====
+# set needed data
+needGpca = True
+needS    = True
+needW    = True
+
+# I don't foresee a benefit to constraining all HP optimizations to follow the same path of folds.
+# To make the traning more repeatable while still allowing for a pseudorandom walk over the folds 
+# we define the rng up front and will write it out in case it is useful in the future. 
+random_cv_starting_seed = int(round(np.random.uniform()*1000000))
+k_cv_rng = np.random.default_rng(random_cv_starting_seed)
+with open('random_cv_starting_seed.json', 'w') as f:
+    json.dump({'random_cv_starting_seed':random_cv_starting_seed}, f)
+
+
+# %%
+# Index prep -------------------------------------------------------------------
+path     = '../' 
+pathData = path+'data/processed/'
+
+indexDictList = json.load(open(pathData+'indexDictList_syr.txt')) 
+
+trainIndex    = indexDictList[splitIndex]['Train']
+trainGroups   = indexDictList[splitIndex]['TrainGroups']
+testGroups    = indexDictList[splitIndex]['TestGroups'] 
+testIndex     = indexDictList[splitIndex]['Test']
+# %%
+
+# Data prep -------------------------------------------------------------------
+# Y ===========================================================================
+Y = np.load(pathData+'Y.npy')
+# G ===========================================================================
+if needGpca:
+    G = np.load(pathData+'G_PCA_1.npy') 
+# S ===========================================================================
+if needS:
+    S = np.load(pathData+'S.npy')
+# W =========================================================================== 
+if needW:
+    W = np.load(pathData+'W.npy')
+data_list = [G, S, W]
+
+"""
+Testing:
+1. Are there NaN in the genomic data that should not be so?
+"""
+all_idx = trainIndex+testIndex
+print("Total indices ---", len(all_idx))
+print("+ctrl NaNs in G -", np.isnan(G).sum())
+print("   In selection -", np.isnan(G[all_idx]).sum())
+print("")
+assert 0 == np.isnan(G[all_idx]).sum(), 'Halted if there were nans found.'
+
+
+nTestGroups = len(set(testGroups))
+x = data_list
+y = Y
+
+# %%
+i = 0
+cvFoldCenterScaleDict = {}
+
+# Calculate values for center/scaling each fold
+ith_tr_idx = trainIndex
+
+YStd  = y[ith_tr_idx].std()
+YMean = y[ith_tr_idx].mean()
+
+GStd  = np.apply_along_axis(np.nanstd,  0, G[ith_tr_idx])
+GMean = np.apply_along_axis(np.nanmean, 0, G[ith_tr_idx])
+
+SStd  = np.apply_along_axis(np.std,  0, S[ith_tr_idx])
+SMean = np.apply_along_axis(np.mean, 0, S[ith_tr_idx])
+
+# we want to center and scale _but_ some time x feature combinations have an sd of 0. (e.g. nitrogen application)
+# to get around this we'll make it so that if sd == 0, sd = 1.
+WStd  = np.apply_along_axis(np.std,  0, W[ith_tr_idx])
+WStd[WStd == 0] = 1
+WMean = np.apply_along_axis(np.mean, 0, W[ith_tr_idx])
+
+cvFoldCenterScaleDict.update({i:{'YStd' : YStd,
+                                 'YMean': YMean,
+                                 'GStd' : GStd,
+                                 'GMean': GMean,
+                                 'SStd' : SStd,
+                                 'SMean': SMean,
+                                 'WStd' : WStd,
+                                 'WMean': WMean}})
+
+# %%
+x_all = x
+
+# %%
+# Set up data: ----------------------------------------------------------------
+i = list(cvFoldCenterScaleDict.keys())[0]
+
+# Center and scale testing and training data: ---------------------------------
+## Training data: =============================================================
+x_all[0] = ((x_all[0] - cvFoldCenterScaleDict[i]['GMean']) / cvFoldCenterScaleDict[i]['GStd'])
+x_all[0] =   x_all[0].astype('float32') 
+
+x_all[1] = ((x_all[1] - cvFoldCenterScaleDict[i]['SMean']) / cvFoldCenterScaleDict[i]['SStd'])
+x_all[1] =   x_all[1].astype('float32')
+
+x_all[2] = ((x_all[2] - cvFoldCenterScaleDict[i]['WMean']) / cvFoldCenterScaleDict[i]['WStd'])
+x_all[2] =   x_all[2].astype('float32')
+
+# %%
+# Training loop ----
+
+foldwise_data_list = []
+
+"""
+This is now a list of tensors instead of one tensor (to prep for the big model)
+We'll do this a little different by iterating over the inputs. Then we can be agnostic as to 
+what inputs are going in -- just going off position.
+
+This will need to happen for the k fold evaluation below
+"""
+x_train = [x_tensor[trainIndex] for x_tensor in x] 
+x_test  = [x_tensor[testIndex]  for x_tensor in x] 
+y_train = y[trainIndex] 
+y_test  = y[testIndex]
+
+# Center and scale testing and training data: ---------------------------------
+## Training data: =============================================================
+y_train = (y_train - cvFoldCenterScaleDict[i]['YMean']) / cvFoldCenterScaleDict[i]['YStd']
+
+x_train[0] = ((x_train[0] - cvFoldCenterScaleDict[i]['GMean']) / cvFoldCenterScaleDict[i]['GStd'])
+x_train[0] =   x_train[0].astype('float32')
+
+x_train[1] = ((x_train[1] - cvFoldCenterScaleDict[i]['SMean']) / cvFoldCenterScaleDict[i]['SStd'])
+x_train[1] =   x_train[1].astype('float32')
+
+x_train[2] = ((x_train[2] - cvFoldCenterScaleDict[i]['WMean']) / cvFoldCenterScaleDict[i]['WStd'])
+x_train[2] =   x_train[2].astype('float32')
+
+## Test | Validation data: ====================================================
+y_test = (y_test - cvFoldCenterScaleDict[i]['YMean']) / cvFoldCenterScaleDict[i]['YStd']
+
+x_test[0] = ((x_test[0] - cvFoldCenterScaleDict[i]['GMean']) / cvFoldCenterScaleDict[i]['GStd'])
+x_test[0] =   x_test[0].astype('float32')
+
+x_test[1] = ((x_test[1] - cvFoldCenterScaleDict[i]['SMean']) / cvFoldCenterScaleDict[i]['SStd'])
+x_test[1] =   x_test[1].astype('float32')
+
+x_test[2] = ((x_test[2] - cvFoldCenterScaleDict[i]['WMean']) / cvFoldCenterScaleDict[i]['WStd'])
+x_test[2] =   x_test[2].astype('float32')
+
+foldwise_data_list.append({'train':{'y':y_train,
+                                    'x':x_train},
+                            'test':{'y':y_test,
+                                    'x':x_test} 
+                      })
+# %%
+x_train = foldwise_data_list[0]['train']['x']
+y_train = foldwise_data_list[0]['train']['y']
+x_test  = foldwise_data_list[0]['test' ]['x']
+y_test  = foldwise_data_list[0]['test' ]['y']
+
+# ### Load Models, Rebuild if needed.
+
+# %%
+y_test.shape
 
 
 # %% [markdown]
@@ -1008,16 +1107,522 @@ def get_rmse(observed, predicted):
     RMSE = math.sqrt(MSE)
     return(RMSE)
 
-# %%
-# now that we have all the predictions what would the ideal mix of these models be?
 
 # %%
 
+# %%
+
+# %% [markdown]
+# ## Setup train/test predictions and covariates
+
+# %%
+mod_train = pd.concat([
+    phenotype.loc[trainIndex, ['Pedigree', 'F', 'M', 'ExperimentCode', 'Year']
+            ].reset_index().drop(columns = 'index'),
+    mod_train_y,
+    mod_train_yhats
+], axis = 1)
+
+mod_test = pd.concat([
+    phenotype.loc[testIndex, ['Pedigree', 'F', 'M', 'ExperimentCode', 'Year']
+            ].reset_index().drop(columns = 'index'),
+    mod_test_y,
+    mod_test_yhats
+], axis = 1)
 
 
-mod_test_yhats.loc[:, [e for e in list(mod_test_yhats) if re.match('cat_.+', e)]]
+# %%
+# get standard deviation of a set of models
+# How much do models vary over replicates?
+def get_mod_rep_std(mod_list = ['lm_0', 'lm_1'],
+                    df = mod_train):
+    return(df.loc[:, mod_list].std(axis = 1).mean())
+
+def get_mod_std(mod_list = ['lm_0', 'lm_1'],
+                    df = mod_train):
+    return(list(df.loc[:, mod_list].std(axis = 0)))
+    
+
+# get_mod_rep_std(mod_list = ['lm_0', 'bglr_1'],
+#                 df = mod_train)
+
+# %%
+# How much variability is there within each model type (in train set?)
+mod_types = ['lm', 'bglr', 'knn', 'rf', 'rnr', 'svrl', 'full', 'cat']
 
 
+replicate_variability_summary = pd.DataFrame([
+    [e, get_mod_rep_std(
+        mod_list = [e1 for e1 in list(mod_train) if re.findall(e+'_.+', e1)], 
+        df = mod_train)
+    ] for e in mod_types], columns = ['mod', 'std'])
+
+replicate_variability_summary
+
+# %%
+# Based on the above, I'm limiting the number of replicates of the models that would be expected to converge
+# and have std on the order of e-17 
+# - lm
+# - knn
+# - rnr
+
+# drop all but the 0th rep for these models
+for lst in [[e+'_'+str(9-i) for i in range(9)] for e in ['lm', 'knn', 'rnr']]:
+    mod_train = mod_train.drop(columns=lst)
+    mod_test = mod_test.drop(columns=lst)
+
+
+# %% code_folding=[]
+def get_mod_cols(
+    df = mod_train,
+    mod_type = 'lm'):
+    e = mod_type
+    col_list = [e1 for e1 in list(df) if re.findall(e+'_.+', e1)]
+    return(col_list)
+
+def get_all_mod_cols(
+    df = mod_train,
+    mod_types = ['bglr', 'cat']):
+    col_list = [get_mod_cols(
+        df = df,
+        mod_type = e) for e in mod_types]
+    # flatten list
+    out = []
+    for i in range(len(col_list)):
+        out += col_list[i]
+    return(out)
+
+
+# %%
+# calculate several weighting options based on TRAINING set
+all_mod_cols = get_all_mod_cols(df = mod_train, mod_types = mod_types)
+
+# uniform weighting ------------------------------------------------------------
+uniform_weights = [1/len(all_mod_cols) for i in range(len(all_mod_cols))]
+
+# uniform weighting wrt model --------------------------------------------------
+# take n model types and convert to weight per replicate
+uniform_by_type_weights = [1/len(mod_types) for i in range(len(mod_types))]
+n_rep_by_type = [len(get_mod_cols(df = mod_train, mod_type = e)) for e in mod_types]
+# apply to column names
+uniform_by_type_weights = [uniform_by_type_weights[i]/n_rep_by_type[i] for i in range(len(uniform_by_type_weights))] 
+# convert to model types
+temp_types = [mod_col.split('_')[0] for mod_col in all_mod_cols]
+#convert to index
+temp_idxs = [[i for i in range(len(mod_types)) if mod_types[i] == mod_col][0] for mod_col in temp_types]
+# convert to weigths
+uniform_by_type_weights = [uniform_by_type_weights[i] for i in temp_idxs]
+
+
+# weigting wrt rmse ------------------------------------------------------------
+# take inverse of rmse and convert to sum to one
+temp = [1/get_rmse(mod_train.y, mod_train[e]) for e in all_mod_cols]
+inv_rmse_weights = [e/np.sum(temp) for e in temp]
+
+# weigting wrt std -------------------------------------------------------------
+temp = get_mod_std(mod_list = all_mod_cols, df = mod_train)
+temp = [1/e for e in temp]
+inv_std_weights = [e/np.sum(temp) for e in temp]
+
+
+# %%
+def weighted_sum_cols(mod_list = ['lm_0', 'cat_0'],
+                      mod_weights = [0.5, 0.5],
+                      df = mod_train):
+    # ensure weights sum to 1
+    mod_weights = mod_weights/np.sum(mod_weights) 
+    temp = df.loc[:, mod_list]
+    temp = (temp * mod_weights).sum(axis = 1)
+    return(temp)
+
+
+# %%
+def ftrain(weight_list):
+    temp = weighted_sum_cols(
+        mod_list = all_mod_cols,
+        mod_weights = weight_list,
+        df = mod_train)
+    out = get_rmse(
+        observed = mod_train['y'], 
+        predicted = temp)
+    return(out)
+
+def ftest(weight_list):
+    temp = weighted_sum_cols(
+        mod_list = all_mod_cols,
+        mod_weights = weight_list,
+        df = mod_test)
+    out = get_rmse(
+        observed = mod_test['y'], 
+        predicted = temp)
+    return(out)
+
+
+# %%
+list_of_weight_lists = [uniform_weights,
+                        uniform_by_type_weights,
+                        inv_rmse_weights,
+                        inv_std_weights]
+ens_train_rmses = [ftrain(e) for e in list_of_weight_lists]
+ens_test_rmses  = [ftest(e) for e in list_of_weight_lists]
+
+# %%
+# stack model (no validation) --------------------------------------------------
+regr = MLPRegressor(random_state=1, hidden_layer_sizes = (100, 100), max_iter=500)
+regr.fit(mod_train.loc[:, all_mod_cols], mod_train.loc[:, 'y'])
+
+# %%
+ens_train_rmses += [get_rmse(
+    observed = mod_train['y'], 
+    predicted = regr.predict(mod_train.loc[:, all_mod_cols]))]
+
+ens_test_rmses += [get_rmse(
+    observed = mod_test['y'], 
+    predicted = regr.predict(mod_test.loc[:, all_mod_cols]))]
+
+# %%
+pd.DataFrame(zip([
+    'uniform_weights',
+    'uniform_by_type_weights',
+    'inv_rmse_weights',
+    'inv_std_weights',
+    'mlp_predictions'],
+    ens_train_rmses,
+    ens_test_rmses), columns = ['EnsembleMethod', 'Train', 'Test'])
+
+# %%
+# Is there a small MLP that would have performed well?
+# Yes, but none are stelar.
+
+# def f(sizes = (100), iters = 500):
+#     regr = MLPRegressor(random_state=1, hidden_layer_sizes = sizes, max_iter=iters)
+#     regr.fit(mod_train.loc[:, all_mod_cols], mod_train.loc[:, 'y'])
+#     out = [get_rmse(
+#             observed = mod_train['y'], 
+#             predicted = regr.predict(mod_train.loc[:, all_mod_cols])), 
+#            get_rmse(
+#             observed = mod_test['y'], 
+#             predicted = regr.predict(mod_test.loc[:, all_mod_cols]))]
+#     return(out)
+
+#  params = [(x, y) for x in [
+#      1, 3, 30, 60, 90,
+#      (1, 1), (3, 3), (30, 30), (60, 60), (90, 90)                      
+#                            ] for y in [1, 3, 30, 60, 90, 300]]
+    
+# rmses = [f(e[0], e[1]) for e in params]
+
+# rmses_summary = pd.concat([
+#     pd.DataFrame(params, columns = ['Neurons', 'Epochs']), 
+#     pd.DataFrame(rmses, columns = ['TrainRMSE', 'TestRMSE'])], axis = 1)
+
+# Neurons	Epochs	TrainRMSE	TestRMSE
+# (3, 3)	1	    0.585326	0.942080
+# 30    	1	    4.322395	0.960786
+# (90, 90)	3	    1.301509	1.014392
+# (3, 3)	3	    0.456046	1.022075
+
+# %%
+
+# %%
+# look for saturation within a model 
+
+# pass in a mod list so the same code can be reused for all models in addition to a single type
+
+
+
+
+def resample_model_averages(individual_mods = ['cat_'+str(i) for i in range(10)],
+                            n_iter = 5,
+                            p = None):
+    # get performance for all reps individually
+    # from 2 -> max rep -1
+    # get iter rmses by randomly combining the replicates
+    n_mods = len(individual_mods)
+
+    # one model ----
+    individual_rmses = [
+        get_rmse(observed = mod_test['y'], 
+                 predicted= mod_test[e]) for e in individual_mods]
+    individual_rmses = pd.DataFrame(zip(
+        [1 for i in range(n_mods)],
+         [[individual_mods[i]] for i in range(n_mods)],
+        individual_rmses), columns = ['n_mods', 'drawn_mods', 'rmse'])
+
+    # 2 to n-1 models ---- 
+    def f(individual_mods = individual_mods, draw_mods = 2, n_iter = 5, p = None):
+        if type(p) != list:
+            p = [1/len(individual_mods) for i in range(len(individual_mods))]
+
+        drawn_mods_list = [list(np.random.choice(individual_mods, draw_mods, p = p)) for i in range(n_iter)]
+        drawn_mods_rmse = [get_rmse(observed = mod_test['y'], 
+                                    predicted= weighted_sum_cols(
+                                        mod_list = drawn_mods,
+                                        mod_weights = [1/draw_mods for i in range(draw_mods)],
+                                        df = mod_test) 
+                                   ) for drawn_mods in drawn_mods_list]
+        out = pd.DataFrame(zip(
+            [draw_mods for i in range(n_iter)],
+            drawn_mods_list,
+            drawn_mods_rmse
+        ), columns = ['n_mods', 'drawn_mods', 'rmse'])
+        return(out)
+
+    out_mid = pd.concat([f(individual_mods = individual_mods, 
+                           draw_mods = i,
+                           n_iter = n_iter, 
+                           p = p
+                           ) for i in range(2, (n_mods))], 
+                           axis = 0)
+    # all models ----
+    all_reps_rmses = [
+        get_rmse(
+            observed = mod_test['y'], 
+            predicted= weighted_sum_cols(
+                mod_list = individual_mods,
+                mod_weights = [1/n_mods for i in range(n_mods)],
+                df = mod_test) )]
+
+    all_reps_rmses = pd.DataFrame(zip(
+        [n_mods for i in range(n_mods)],
+        [individual_mods for i in range(n_mods)],
+        all_reps_rmses), columns = ['n_mods', 'drawn_mods', 'rmse'])
+
+    out = pd.concat([individual_rmses,
+                     out_mid,
+                     all_reps_rmses])
+    out = out.reset_index().drop(columns = 'index')
+    return(out)
+
+
+# %% [markdown] heading_collapsed=true
+# ### Averaging within a model type
+
+# %% hidden=true
+temp = resample_model_averages(
+    individual_mods = ['cat_'+str(i) for i in range(10)],
+    n_iter = 50,
+    p = None)
+temp.head()
+
+# %% hidden=true
+px.scatter(temp, x = 'n_mods', y = 'rmse', trendline='lowess')
+
+# %% hidden=true
+temp = resample_model_averages(
+    individual_mods = ['bglr_'+str(i) for i in range(10)],
+    n_iter = 50,
+    p = None)
+temp.head()
+
+# %% hidden=true
+px.box(temp, x = 'n_mods', y = 'rmse')
+
+# %% [markdown] heading_collapsed=true
+# ### Averaging Across model types (weighting by model type)
+
+# %% hidden=true
+
+# %% hidden=true
+# all models
+temp = resample_model_averages(
+    individual_mods = all_mod_cols,
+    n_iter = 50,
+    p = uniform_by_type_weights)
+temp.head()
+
+# %% hidden=true
+px.box(temp, x = 'n_mods', y = 'rmse')
+
+# %% hidden=true
+px.scatter(temp, x = 'n_mods', y = 'rmse', trendline = 'lowess')
+
+# %% hidden=true
+
+# %% hidden=true
+# best few models
+temp = resample_model_averages(
+    individual_mods = ['bglr_'+str(i) for i in range(10)] + ['cat_'+str(i) for i in range(10)],
+    n_iter = 50#,
+#     p = uniform_by_type_weights
+)
+temp.head()
+
+# %% hidden=true
+# px.violin(temp, x = 'n_mods', y = 'rmse'#, box=True#, points="all"
+#          )
+
+px.box(temp, x = 'n_mods', y = 'rmse'#, box=True#, points="all"
+         )
+
+# %% [markdown]
+# ### draw 2 models
+
+# %%
+temp = [[x, y] for x in all_mod_cols for y in all_mod_cols]
+temp = pd.DataFrame(temp, columns=['Model1', 'Model2'])
+temp['RMSE'] = np.nan
+temp.head()
+
+# %%
+i = 0
+for i in tqdm.tqdm(range(temp.shape[0])):
+    temp.loc[i, 'RMSE'] = get_rmse(
+        observed = mod_test['y'], 
+        predicted = weighted_sum_cols(
+               mod_list = [temp.loc[i, 'Model1'], temp.loc[i, 'Model2']],
+            mod_weights = [0.5, 0.5],
+                     df = mod_test))
+
+# %%
+temp.head()
+
+# %%
+px.scatter(temp, x = "Model1", y = "Model2", color = "RMSE")
+
+# %%
+temp_wide = temp.pivot(index='Model1', columns='Model2', values='RMSE').reset_index()
+temp_wide.index = temp_wide['Model1']
+temp_wide = temp_wide.drop(columns='Model1')
+
+# %%
+px.imshow(temp_wide)
+
+# %%
+
+# %%
+
+# %%
+# px.scatter_3d(temp, 
+#               x = "Model1", y = "Model2", z = "RMSE", 
+#               color = "RMSE", 
+# #          size = "RMSE"
+#              )
+
+# %%
+
+# %%
+
+# %%
+years = [2022-i for i in range(9)]
+len(years)
+
+# %%
+y_cmb = [[x, y, z] for x in years for y in years for z in years]
+len(y_cmb)
+
+
+# %% [markdown]
+# ### Training Set
+# Now that we have all the predictions what would the ideal mix of these models be?
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+
+# %%
+# need to calculate modelwise varaiance 
+# note that the std of the yhats (across replicates wrt to observation) will be equal to the same of error
+def model_err_stats(
+    df = mod_train_yhats,
+    ys = mod_train_y,
+    mod_type = 'cat'):
+
+    select_cols = [e for e in list(df) if re.match(mod_type+"_\d+", e)]
+
+    yhat_mat = np.matrix( df.loc[:, select_cols])
+
+
+    yhat_stds = np.std(yhat_mat, axis = 1)
+
+    # convert to residuals
+    yhat_mat = (yhat_mat - np.matrix(ys['y']).T)
+    errs_mean = np.mean(yhat_mat, axis = 1)
+
+    out = pd.DataFrame(
+        np.concatenate([
+            yhat_stds,
+            errs_mean], axis = 1), 
+        columns = ['yhat_stds', 
+                   'err_mean'])
+    return(out)
+
+
+
+
+# %%
+mod_list = list(set( [e.split('_')[0] for e in list(df)]))
+
+mod_err_stats_list = [
+    model_err_stats(
+        df = mod_train_yhats,
+        ys = mod_train_y,
+        mod_type = mod) for mod in mod_list]
+
+
+# %%
+def f(i, mod_list, mod_err_stats_list):
+    out = mod_err_stats_list[i]
+    out = pd.DataFrame(np.mean(out, 0)).T
+#     out['rmse'] = np.sqrt(np.mean((mod_err_stats_list[i].loc[:, 'err_mean'])**2))
+    out['mod'] = mod_list[i]
+    return(out)
+
+mod_err_stats_df = pd.concat([f(i, mod_list, mod_err_stats_list) for i in range(len(mod_list))])
+    
+mod_err_stats_df
+
+# %%
+# Now we can try different weighting schemes:
+
+
+
+
+# %%
+
+# %%
+
+# %%
+px.scatter(mod_err_stats_list[5], x = 'yhat_stds', y = 'err_mean', trendline='ols')
+
+# %%
+get_rmse(ys, pd.DataFrame(np.mean(yhat_mat, axis = 1)))
+
+# %%
+ys
+
+# %%
+summary_df
+
+px.scatter(summary_df, x = "key1", y = "train_rmse")
+
+# %%
+px.scatter(summary_df, x="key1", y="test_rmse")
+
+# %% [markdown]
+# ### Test Set
+
+# %%
+# selecting a subset of columns:
+# mod_test_yhats.loc[:, [e for e in list(mod_test_yhats) if re.match('cat_.+', e)]]
 
 # %%
 get_rmse(mod_test_y, mod_test_yhats['lm_0'])
@@ -1197,188 +1802,7 @@ pd.DataFrame(mod_comb_list_test)
 # %% [markdown]
 # # Setup -- Migrated from top
 
-# %% [markdown]
-# ## Set up data -- used in salinence, pulling observations
-
 # %%
-phenotype = pd.read_csv('../data/processed/tensor_ref_phenotype.csv')
-soil = pd.read_csv('../data/processed/tensor_ref_soil.csv')
-weather = pd.read_csv('../data/processed/tensor_ref_weather.csv')
-
-# %%
-# %%
-# Specified Options -----------------------------------------------------------
-## General ====
-projectName = 'kt' # this is the name of the folder which will be made to hold the tuner's progress.
-# hp = kt.HyperParameters()
-## Tuning ====
-splitIndex = 0
-maxTrials  = 40  
-numEpochs  = 1000 
-# kfolds     = 10 
-cvSeed     = 646843
-max_pseudorep = 10 # <-- New. How many times should the model be run to account for random initialization? 
-## Model ====
-# set needed data
-needGpca = True
-needS    = True
-needW    = True
-
-# I don't foresee a benefit to constraining all HP optimizations to follow the same path of folds.
-# To make the traning more repeatable while still allowing for a pseudorandom walk over the folds 
-# we define the rng up front and will write it out in case it is useful in the future. 
-random_cv_starting_seed = int(round(np.random.uniform()*1000000))
-k_cv_rng = np.random.default_rng(random_cv_starting_seed)
-with open('random_cv_starting_seed.json', 'w') as f:
-    json.dump({'random_cv_starting_seed':random_cv_starting_seed}, f)
-
-
-# %%
-# Index prep -------------------------------------------------------------------
-path     = '../' 
-pathData = path+'data/processed/'
-
-indexDictList = json.load(open(pathData+'indexDictList_syr.txt')) 
-
-trainIndex    = indexDictList[splitIndex]['Train']
-trainGroups   = indexDictList[splitIndex]['TrainGroups']
-testGroups    = indexDictList[splitIndex]['TestGroups'] 
-testIndex     = indexDictList[splitIndex]['Test']
-# %%
-
-# Data prep -------------------------------------------------------------------
-# Y ===========================================================================
-Y = np.load(pathData+'Y.npy')
-# G ===========================================================================
-if needGpca:
-    G = np.load(pathData+'G_PCA_1.npy') 
-# S ===========================================================================
-if needS:
-    S = np.load(pathData+'S.npy')
-# W =========================================================================== 
-if needW:
-    W = np.load(pathData+'W.npy')
-data_list = [G, S, W]
-
-"""
-Testing:
-1. Are there NaN in the genomic data that should not be so?
-"""
-all_idx = trainIndex+testIndex
-print("Total indices ---", len(all_idx))
-print("+ctrl NaNs in G -", np.isnan(G).sum())
-print("   In selection -", np.isnan(G[all_idx]).sum())
-print("")
-assert 0 == np.isnan(G[all_idx]).sum(), 'Halted if there were nans found.'
-
-
-nTestGroups = len(set(testGroups))
-x = data_list
-y = Y
-
-# %%
-i = 0
-cvFoldCenterScaleDict = {}
-
-# Calculate values for center/scaling each fold
-ith_tr_idx = trainIndex
-
-YStd  = y[ith_tr_idx].std()
-YMean = y[ith_tr_idx].mean()
-
-GStd  = np.apply_along_axis(np.nanstd,  0, G[ith_tr_idx])
-GMean = np.apply_along_axis(np.nanmean, 0, G[ith_tr_idx])
-
-SStd  = np.apply_along_axis(np.std,  0, S[ith_tr_idx])
-SMean = np.apply_along_axis(np.mean, 0, S[ith_tr_idx])
-
-# we want to center and scale _but_ some time x feature combinations have an sd of 0. (e.g. nitrogen application)
-# to get around this we'll make it so that if sd == 0, sd = 1.
-WStd  = np.apply_along_axis(np.std,  0, W[ith_tr_idx])
-WStd[WStd == 0] = 1
-WMean = np.apply_along_axis(np.mean, 0, W[ith_tr_idx])
-
-cvFoldCenterScaleDict.update({i:{'YStd' : YStd,
-                                 'YMean': YMean,
-                                 'GStd' : GStd,
-                                 'GMean': GMean,
-                                 'SStd' : SStd,
-                                 'SMean': SMean,
-                                 'WStd' : WStd,
-                                 'WMean': WMean}})
-
-# %%
-x_all = x
-
-# %%
-# Set up data: ----------------------------------------------------------------
-i = list(cvFoldCenterScaleDict.keys())[0]
-
-# Center and scale testing and training data: ---------------------------------
-## Training data: =============================================================
-x_all[0] = ((x_all[0] - cvFoldCenterScaleDict[i]['GMean']) / cvFoldCenterScaleDict[i]['GStd'])
-x_all[0] =   x_all[0].astype('float32') 
-
-x_all[1] = ((x_all[1] - cvFoldCenterScaleDict[i]['SMean']) / cvFoldCenterScaleDict[i]['SStd'])
-x_all[1] =   x_all[1].astype('float32')
-
-x_all[2] = ((x_all[2] - cvFoldCenterScaleDict[i]['WMean']) / cvFoldCenterScaleDict[i]['WStd'])
-x_all[2] =   x_all[2].astype('float32')
-
-# %%
-# Training loop ----
-
-foldwise_data_list = []
-
-"""
-This is now a list of tensors instead of one tensor (to prep for the big model)
-We'll do this a little different by iterating over the inputs. Then we can be agnostic as to 
-what inputs are going in -- just going off position.
-
-This will need to happen for the k fold evaluation below
-"""
-x_train = [x_tensor[trainIndex] for x_tensor in x] 
-x_test  = [x_tensor[testIndex]  for x_tensor in x] 
-y_train = y[trainIndex] 
-y_test  = y[testIndex]
-
-# Center and scale testing and training data: ---------------------------------
-## Training data: =============================================================
-y_train = (y_train - cvFoldCenterScaleDict[i]['YMean']) / cvFoldCenterScaleDict[i]['YStd']
-
-x_train[0] = ((x_train[0] - cvFoldCenterScaleDict[i]['GMean']) / cvFoldCenterScaleDict[i]['GStd'])
-x_train[0] =   x_train[0].astype('float32')
-
-x_train[1] = ((x_train[1] - cvFoldCenterScaleDict[i]['SMean']) / cvFoldCenterScaleDict[i]['SStd'])
-x_train[1] =   x_train[1].astype('float32')
-
-x_train[2] = ((x_train[2] - cvFoldCenterScaleDict[i]['WMean']) / cvFoldCenterScaleDict[i]['WStd'])
-x_train[2] =   x_train[2].astype('float32')
-
-## Test | Validation data: ====================================================
-y_test = (y_test - cvFoldCenterScaleDict[i]['YMean']) / cvFoldCenterScaleDict[i]['YStd']
-
-x_test[0] = ((x_test[0] - cvFoldCenterScaleDict[i]['GMean']) / cvFoldCenterScaleDict[i]['GStd'])
-x_test[0] =   x_test[0].astype('float32')
-
-x_test[1] = ((x_test[1] - cvFoldCenterScaleDict[i]['SMean']) / cvFoldCenterScaleDict[i]['SStd'])
-x_test[1] =   x_test[1].astype('float32')
-
-x_test[2] = ((x_test[2] - cvFoldCenterScaleDict[i]['WMean']) / cvFoldCenterScaleDict[i]['WStd'])
-x_test[2] =   x_test[2].astype('float32')
-
-foldwise_data_list.append({'train':{'y':y_train,
-                                    'x':x_train},
-                            'test':{'y':y_test,
-                                    'x':x_test} 
-                      })
-# %%
-x_train = foldwise_data_list[0]['train']['x']
-y_train = foldwise_data_list[0]['train']['y']
-x_test  = foldwise_data_list[0]['test' ]['x']
-y_test  = foldwise_data_list[0]['test' ]['y']
-
-# ### Load Models, Rebuild if needed.
 
 # %% [markdown]
 # # What are some statistics about the data and train/test sets
